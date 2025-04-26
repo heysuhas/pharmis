@@ -52,7 +52,7 @@ const upload = multer({
 const dbConfig = {
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
+  password: process.env.DB_PASSWORD || 'pharmis_password',
   database: process.env.DB_NAME || 'pharmis_db',
   waitForConnections: true,
   connectionLimit: 10,
@@ -69,7 +69,22 @@ pool.getConnection()
   })
   .catch(err => {
     console.error('Database connection failed:', err);
+    process.exit(1); // Exit if database connection fails
   });
+
+// Add error handler for pool
+pool.on('error', (err) => {
+  console.error('Database pool error:', err);
+  if (err.code === 'PROTOCOL_CONNECTION_LOST') {
+    console.error('Database connection was closed. Reconnecting...');
+  } else if (err.code === 'ER_CON_COUNT_ERROR') {
+    console.error('Database has too many connections');
+  } else if (err.code === 'ECONNREFUSED') {
+    console.error('Database connection was refused');
+  } else {
+    console.error('Database error:', err);
+  }
+});
 
 // Middleware to verify JWT token
 const authenticateToken = (req, res, next) => {
@@ -106,6 +121,22 @@ app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, password } = req.body;
     
+    // Validate input
+    if (!name || !email || !password) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+    
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ message: 'Invalid email format' });
+    }
+    
+    // Validate password strength
+    if (password.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters long' });
+    }
+    
     // Check if user already exists
     const [existingUsers] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
     
@@ -115,34 +146,52 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ message: 'User with this email already exists' });
     }
     
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-    
-    // Insert user
-    const [result] = await pool.query(
-      'INSERT INTO users (name, email, password) VALUES (?, ?, ?)',
-      [name, email, hashedPassword]
-    );
-    
-    const userId = result.insertId;
-    
-    // Create initial profile
-    await pool.query('INSERT INTO profiles (user_id) VALUES (?)', [userId]);
-    
-    // Generate token
-    const token = jwt.sign(
-      { id: userId, name, email },
-      process.env.JWT_SECRET || 'pharmis_secret_key',
-      { expiresIn: '30d' }
-    );
-    
-    // Log successful registration
-    await logActivity(userId, 'REGISTER_SUCCESS', 'User successfully created an account');
-    
-    res.status(201).json({
-      token,
-      user: { id: userId, name, email }
-    });
+    // Start a transaction
+    const connection = await pool.getConnection();
+    await connection.beginTransaction();
+    try {
+      // Hash password
+      const hashedPassword = await bcrypt.hash(password, 10);
+      
+      // Insert user
+      const [result] = await connection.query(
+        'INSERT INTO users (username, name, email, password) VALUES (?, ?, ?, ?)',
+        [name, name, email, hashedPassword]
+      );
+      const userId = result.insertId;
+      // Create initial profile
+      await connection.query('INSERT INTO profiles (user_id) VALUES (?)', [userId]);
+      
+      // Create initial emergency contact
+      await connection.query(
+        'INSERT INTO emergency_contacts (user_id, name, relationship, phone) VALUES (?, ?, ?, ?)',
+        [userId, '', '', '']
+      );
+      
+      // Generate token
+      const token = jwt.sign(
+        { id: userId, name, email },
+        process.env.JWT_SECRET || 'pharmis_secret_key',
+        { expiresIn: '30d' }
+      );
+      
+      // Commit transaction
+      await connection.commit();
+      
+      // Log successful registration
+      await logActivity(userId, 'REGISTER_SUCCESS', 'User successfully created an account');
+      
+      res.status(201).json({
+        token,
+        user: { id: userId, name, email }
+      });
+    } catch (error) {
+      // Rollback transaction on error
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
   } catch (error) {
     // Log registration error
     await logActivity(null, 'REGISTER_ERROR', `Registration failed with error: ${error.message}`);
@@ -222,7 +271,10 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
     const userId = req.user.id;
     
     // Get profile data
-    const [profiles] = await pool.query('SELECT * FROM profiles WHERE user_id = ?', [userId]);
+    const [profiles] = await pool.query(
+      'SELECT * FROM profiles WHERE user_id = ?',
+      [userId]
+    );
     
     if (profiles.length === 0) {
       return res.status(404).json({ message: 'Profile not found' });
@@ -230,30 +282,42 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
     
     const profile = profiles[0];
     
-    // Get allergies
-    const [allergies] = await pool.query('SELECT name FROM allergies WHERE user_id = ?', [userId]);
-    
-    // Get medical conditions
-    const [conditions] = await pool.query('SELECT name FROM medical_conditions WHERE user_id = ?', [userId]);
-    
-    // Get medications
-    const [medications] = await pool.query('SELECT name, dosage FROM medications WHERE user_id = ?', [userId]);
-    
     // Get emergency contact
-    const [contacts] = await pool.query('SELECT name, relationship, phone FROM emergency_contacts WHERE user_id = ?', [userId]);
+    const [contacts] = await pool.query(
+      'SELECT * FROM emergency_contacts WHERE user_id = ?',
+      [userId]
+    );
     
     const emergencyContact = contacts.length > 0 ? contacts[0] : null;
     
+    // Get allergies
+    const [allergies] = await pool.query(
+      'SELECT name FROM allergies WHERE user_id = ?',
+      [userId]
+    );
+    
+    // Get conditions
+    const [conditions] = await pool.query(
+      'SELECT name FROM medical_conditions WHERE user_id = ?',
+      [userId]
+    );
+    
+    // Get medications
+    const [medications] = await pool.query(
+      'SELECT name, dosage FROM medications WHERE user_id = ?',
+      [userId]
+    );
+    
     res.json({
       ...profile,
+      emergencyContact,
       allergies: allergies.map(a => a.name),
       conditions: conditions.map(c => c.name),
-      medications: medications.map(m => ({ name: m.name, dosage: m.dosage })),
-      emergencyContact
+      medications: medications.map(m => ({ name: m.name, dosage: m.dosage }))
     });
   } catch (error) {
     console.error('Error fetching profile:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error while fetching profile' });
   }
 });
 
@@ -262,16 +326,18 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const {
-      date_of_birth,
+      name,
+      email,
+      phone,
+      dateOfBirth,
       gender,
       height,
       weight,
-      blood_type,
-      phone,
+      bloodType,
+      emergencyContact,
       allergies,
       conditions,
-      medications,
-      emergencyContact
+      medications
     } = req.body;
     
     // Start a transaction
@@ -279,64 +345,34 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
     await connection.beginTransaction();
     
     try {
+      // Update user info
+      await connection.query(
+        'UPDATE users SET name = ?, email = ? WHERE id = ?',
+        [name, email, userId]
+      );
+      
       // Update profile
       await connection.query(
         `UPDATE profiles SET 
-         date_of_birth = ?, 
-         gender = ?, 
-         height = ?, 
-         weight = ?, 
-         blood_type = ?, 
-         phone = ? 
-         WHERE user_id = ?`,
-        [date_of_birth, gender, height, weight, blood_type, phone, userId]
+          phone = ?,
+          date_of_birth = ?,
+          gender = ?,
+          height = ?,
+          weight = ?,
+          blood_type = ?
+        WHERE user_id = ?`,
+        [
+          phone,
+          dateOfBirth,
+          gender,
+          height,
+          weight,
+          bloodType,
+          userId
+        ]
       );
       
-      // Handle allergies
-      if (allergies) {
-        await connection.query('DELETE FROM allergies WHERE user_id = ?', [userId]);
-        
-        if (allergies.length > 0) {
-          const allergyValues = allergies.map(allergy => [userId, allergy]);
-          await connection.query(
-            'INSERT INTO allergies (user_id, name) VALUES ?',
-            [allergyValues]
-          );
-        }
-      }
-      
-      // Handle medical conditions
-      if (conditions) {
-        await connection.query('DELETE FROM medical_conditions WHERE user_id = ?', [userId]);
-        
-        if (conditions.length > 0) {
-          const conditionValues = conditions.map(condition => [userId, condition]);
-          await connection.query(
-            'INSERT INTO medical_conditions (user_id, name) VALUES ?',
-            [conditionValues]
-          );
-        }
-      }
-      
-      // Handle medications
-      if (medications) {
-        await connection.query('DELETE FROM medications WHERE user_id = ?', [userId]);
-        
-        if (medications.length > 0) {
-          const medicationValues = medications.map(med => [
-            userId, 
-            typeof med === 'string' ? med : med.name, 
-            typeof med === 'string' ? null : med.dosage
-          ]);
-          
-          await connection.query(
-            'INSERT INTO medications (user_id, name, dosage) VALUES ?',
-            [medicationValues]
-          );
-        }
-      }
-      
-      // Handle emergency contact
+      // Update emergency contact
       if (emergencyContact) {
         const { name, relationship, phone } = emergencyContact;
         
@@ -359,6 +395,41 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
         }
       }
       
+      // Update allergies
+      await connection.query('DELETE FROM allergies WHERE user_id = ?', [userId]);
+      if (allergies?.length > 0) {
+        const allergyValues = allergies.map(allergy => [userId, allergy]);
+        await connection.query(
+          'INSERT INTO allergies (user_id, name) VALUES ?',
+          [allergyValues]
+        );
+      }
+      
+      // Update conditions
+      await connection.query('DELETE FROM medical_conditions WHERE user_id = ?', [userId]);
+      if (conditions?.length > 0) {
+        const conditionValues = conditions.map(condition => [userId, condition]);
+        await connection.query(
+          'INSERT INTO medical_conditions (user_id, name) VALUES ?',
+          [conditionValues]
+        );
+      }
+      
+      // Update medications
+      await connection.query('DELETE FROM medications WHERE user_id = ?', [userId]);
+      if (medications?.length > 0) {
+        const medicationValues = medications.map(med => [
+          userId, 
+          typeof med === 'string' ? med : med.name, 
+          typeof med === 'string' ? null : med.dosage
+        ]);
+        
+        await connection.query(
+          'INSERT INTO medications (user_id, name, dosage) VALUES ?',
+          [medicationValues]
+        );
+      }
+      
       await connection.commit();
       
       // Log activity
@@ -373,7 +444,109 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
     }
   } catch (error) {
     console.error('Error updating profile:', error);
-    res.status(500).json({ message: 'Server error during profile update' });
+    res.status(500).json({ message: 'Server error while updating profile' });
+  }
+});
+
+app.post('/api/profile/allergies', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { allergy } = req.body;
+    
+    await pool.query(
+      'INSERT INTO allergies (user_id, name) VALUES (?, ?)',
+      [userId, allergy]
+    );
+    
+    res.status(201).json({ message: 'Allergy added successfully' });
+  } catch (error) {
+    console.error('Error adding allergy:', error);
+    res.status(500).json({ message: 'Server error while adding allergy' });
+  }
+});
+
+app.delete('/api/profile/allergies/:allergy', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { allergy } = req.params;
+    
+    await pool.query(
+      'DELETE FROM allergies WHERE user_id = ? AND name = ?',
+      [userId, allergy]
+    );
+    
+    res.json({ message: 'Allergy removed successfully' });
+  } catch (error) {
+    console.error('Error removing allergy:', error);
+    res.status(500).json({ message: 'Server error while removing allergy' });
+  }
+});
+
+app.post('/api/profile/conditions', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { condition } = req.body;
+    
+    await pool.query(
+      'INSERT INTO medical_conditions (user_id, name) VALUES (?, ?)',
+      [userId, condition]
+    );
+    
+    res.status(201).json({ message: 'Condition added successfully' });
+  } catch (error) {
+    console.error('Error adding condition:', error);
+    res.status(500).json({ message: 'Server error while adding condition' });
+  }
+});
+
+app.delete('/api/profile/conditions/:condition', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { condition } = req.params;
+    
+    await pool.query(
+      'DELETE FROM medical_conditions WHERE user_id = ? AND name = ?',
+      [userId, condition]
+    );
+    
+    res.json({ message: 'Condition removed successfully' });
+  } catch (error) {
+    console.error('Error removing condition:', error);
+    res.status(500).json({ message: 'Server error while removing condition' });
+  }
+});
+
+app.post('/api/profile/medications', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { medication } = req.body;
+    
+    await pool.query(
+      'INSERT INTO medications (user_id, name, dosage) VALUES (?, ?, ?)',
+      [userId, medication.name, medication.dosage]
+    );
+    
+    res.status(201).json({ message: 'Medication added successfully' });
+  } catch (error) {
+    console.error('Error adding medication:', error);
+    res.status(500).json({ message: 'Server error while adding medication' });
+  }
+});
+
+app.delete('/api/profile/medications/:medication', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { medication } = req.params;
+    
+    await pool.query(
+      'DELETE FROM medications WHERE user_id = ? AND name = ?',
+      [userId, medication]
+    );
+    
+    res.json({ message: 'Medication removed successfully' });
+  } catch (error) {
+    console.error('Error removing medication:', error);
+    res.status(500).json({ message: 'Server error while removing medication' });
   }
 });
 

@@ -3,8 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { ActivitySquare, Mail, Lock, AlertCircle } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { ActivitySquare, Mail, Lock, AlertCircle, X } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '../contexts/AuthContext';
 
 // Form validation schema
@@ -32,7 +32,8 @@ export default function Login() {
       await login(data.email, data.password);
       navigate('/dashboard');
     } catch (error: any) {
-      setLoginError(error.response?.data?.message || 'Login failed. Please try again.');
+      console.error('Login error:', error);
+      setLoginError(error.message || 'Login failed. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -56,12 +57,28 @@ export default function Login() {
             <p className="text-neutral-500">Your personal healthcare companion</p>
           </div>
 
-          {loginError && (
-            <div className="mb-6 bg-error-50 text-error-700 p-3 rounded-lg flex items-start">
-              <AlertCircle className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" />
-              <p className="text-sm">{loginError}</p>
-            </div>
-          )}
+          <AnimatePresence>
+            {loginError && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="mb-6 bg-error-50 border border-error-200 text-error-700 p-4 rounded-lg flex items-start"
+              >
+                <AlertCircle className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="font-medium mb-1">Login Failed</p>
+                  <p className="text-sm">{loginError}</p>
+                </div>
+                <button
+                  onClick={() => setLoginError(null)}
+                  className="text-error-400 hover:text-error-500"
+                >
+                  <X size={16} />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <form onSubmit={handleSubmit(onSubmit)}>
             <div className="mb-4">

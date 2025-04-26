@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -19,6 +19,7 @@ import {
   Upload
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import axios from 'axios';
 
 // Form validation schema
 const profileSchema = z.object({
@@ -37,7 +38,10 @@ const profileSchema = z.object({
   }).optional(),
   allergies: z.array(z.string()).optional(),
   conditions: z.array(z.string()).optional(),
-  medications: z.array(z.string()).optional(),
+  medications: z.array(z.object({
+    name: z.string(),
+    dosage: z.string().optional(),
+  })).optional(),
 });
 
 type ProfileFormData = z.infer<typeof profileSchema>;
@@ -60,18 +64,43 @@ const ListItem = ({ value, onRemove }: ListItemProps) => (
   </div>
 );
 
+interface MedicationItemProps {
+  name: string;
+  dosage?: string;
+  onRemove: () => void;
+}
+
+const MedicationItem = ({ name, dosage, onRemove }: MedicationItemProps) => (
+  <div className="flex items-center justify-between bg-neutral-50 px-3 py-2 rounded-lg mb-2">
+    <div>
+      <span className="text-sm font-medium">{name}</span>
+      {dosage && <span className="text-sm text-neutral-500 ml-2">({dosage})</span>}
+    </div>
+    <button 
+      type="button" 
+      onClick={onRemove}
+      className="text-neutral-400 hover:text-error-500"
+    >
+      <X size={16} />
+    </button>
+  </div>
+);
+
 export default function Profile() {
   const { user } = useAuth();
-  const [allergies, setAllergies] = useState<string[]>(['Peanuts', 'Penicillin']);
-  const [conditions, setConditions] = useState<string[]>(['Asthma', 'Hypertension']);
-  const [medications, setMedications] = useState<string[]>(['Lisinopril 10mg', 'Ventolin HFA']);
+  const [allergies, setAllergies] = useState<string[]>([]);
+  const [conditions, setConditions] = useState<string[]>([]);
+  const [medications, setMedications] = useState<Array<{ name: string; dosage?: string }>>([]);
   
   const [newAllergy, setNewAllergy] = useState('');
   const [newCondition, setNewCondition] = useState('');
   const [newMedication, setNewMedication] = useState('');
+  const [newMedicationDosage, setNewMedicationDosage] = useState('');
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   
   const { register, handleSubmit, control, formState: { errors } } = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
@@ -92,66 +121,148 @@ export default function Profile() {
     },
   });
 
-  const addAllergy = () => {
+  useEffect(() => {
+    const fetchProfileData = async () => {
+      try {
+        setIsLoading(true);
+        const response = await axios.get('/api/profile');
+        const { allergies, conditions, medications, emergencyContact, ...profileData } = response.data;
+        
+        setAllergies(allergies || []);
+        setConditions(conditions || []);
+        setMedications(medications || []);
+        
+        // Update form with profile data
+        Object.entries(profileData).forEach(([key, value]) => {
+          if (value && key in profileSchema.shape) {
+            const field = key as keyof ProfileFormData;
+            register(field).onChange({ target: { value } });
+          }
+        });
+        
+        // Update emergency contact
+        if (emergencyContact) {
+          const emergencyContactFields = ['name', 'relationship', 'phone'] as const;
+          emergencyContactFields.forEach(field => {
+            if (emergencyContact[field]) {
+              register(`emergencyContact.${field}` as const).onChange({ 
+                target: { value: emergencyContact[field] } 
+              });
+            }
+          });
+        }
+      } catch (err: any) {
+        setError(err.response?.data?.message || 'Failed to load profile data');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    if (user) {
+      fetchProfileData();
+    }
+  }, [user, register]);
+
+  const addAllergy = async () => {
     if (newAllergy.trim()) {
-      setAllergies([...allergies, newAllergy]);
-      setNewAllergy('');
+      try {
+        await axios.post('/api/profile/allergies', { allergy: newAllergy });
+        setAllergies([...allergies, newAllergy]);
+        setNewAllergy('');
+      } catch (err: any) {
+        setError(err.response?.data?.message || 'Failed to add allergy');
+      }
     }
   };
 
-  const removeAllergy = (index: number) => {
-    setAllergies(allergies.filter((_, i) => i !== index));
+  const removeAllergy = async (index: number) => {
+    try {
+      await axios.delete(`/api/profile/allergies/${allergies[index]}`);
+      setAllergies(allergies.filter((_, i) => i !== index));
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to remove allergy');
+    }
   };
 
-  const addCondition = () => {
+  const addCondition = async () => {
     if (newCondition.trim()) {
-      setConditions([...conditions, newCondition]);
-      setNewCondition('');
+      try {
+        await axios.post('/api/profile/conditions', { condition: newCondition });
+        setConditions([...conditions, newCondition]);
+        setNewCondition('');
+      } catch (err: any) {
+        setError(err.response?.data?.message || 'Failed to add condition');
+      }
     }
   };
 
-  const removeCondition = (index: number) => {
-    setConditions(conditions.filter((_, i) => i !== index));
+  const removeCondition = async (index: number) => {
+    try {
+      await axios.delete(`/api/profile/conditions/${conditions[index]}`);
+      setConditions(conditions.filter((_, i) => i !== index));
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to remove condition');
+    }
   };
 
-  const addMedication = () => {
+  const addMedication = async () => {
     if (newMedication.trim()) {
-      setMedications([...medications, newMedication]);
-      setNewMedication('');
+      try {
+        await axios.post('/api/profile/medications', { 
+          medication: {
+            name: newMedication,
+            dosage: newMedicationDosage.trim() || undefined
+          }
+        });
+        setMedications([...medications, { 
+          name: newMedication, 
+          dosage: newMedicationDosage.trim() || undefined 
+        }]);
+        setNewMedication('');
+        setNewMedicationDosage('');
+      } catch (err: any) {
+        setError(err.response?.data?.message || 'Failed to add medication');
+      }
     }
   };
 
-  const removeMedication = (index: number) => {
-    setMedications(medications.filter((_, i) => i !== index));
+  const removeMedication = async (index: number) => {
+    try {
+      await axios.delete(`/api/profile/medications/${medications[index].name}`);
+      setMedications(medications.filter((_, i) => i !== index));
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to remove medication');
+    }
   };
 
   const onSubmit = async (data: ProfileFormData) => {
     try {
       setIsSubmitting(true);
+      setError(null);
       
-      // Format the form data with the list items
-      const formattedData = {
+      await axios.put('/api/profile', {
         ...data,
         allergies,
         conditions,
-        medications,
-      };
-      
-      // In a real application, this would send to the API
-      // await axios.put(`${API_URL}/profile`, formattedData);
-      
-      // Simulate API call
-      console.log('Submitting profile data:', formattedData);
-      await new Promise(resolve => setTimeout(resolve, 1000));
+        medications
+      });
       
       setSubmitSuccess(true);
       setTimeout(() => setSubmitSuccess(false), 3000);
-    } catch (error) {
-      console.error('Failed to update profile', error);
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to update profile');
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+      </div>
+    );
+  }
 
   return (
     <motion.div
@@ -436,29 +547,39 @@ export default function Profile() {
             
             <div className="mb-4">
               {medications.map((medication, index) => (
-                <ListItem 
+                <MedicationItem 
                   key={index} 
-                  value={medication} 
+                  name={medication.name}
+                  dosage={medication.dosage}
                   onRemove={() => removeMedication(index)} 
                 />
               ))}
             </div>
             
-            <div className="flex">
+            <div className="space-y-2">
               <input
                 type="text"
-                className="input rounded-r-none flex-1"
-                placeholder="Add medication"
+                className="input w-full"
+                placeholder="Medication name"
                 value={newMedication}
                 onChange={(e) => setNewMedication(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addMedication())}
+              />
+              <input
+                type="text"
+                className="input w-full"
+                placeholder="Dosage (optional)"
+                value={newMedicationDosage}
+                onChange={(e) => setNewMedicationDosage(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addMedication())}
               />
               <button
                 type="button"
                 onClick={addMedication}
-                className="btn btn-primary rounded-l-none"
+                className="btn btn-primary w-full"
               >
-                <PlusCircle size={16} />
+                <PlusCircle size={16} className="mr-2" />
+                Add Medication
               </button>
             </div>
           </div>

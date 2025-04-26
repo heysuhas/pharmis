@@ -38,7 +38,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Validate token and get user data
           const response = await axios.get(`${API_URL}/auth/me`);
           setUser(response.data);
-        } catch (err) {
+        } catch (err: any) {
+          console.error('Auth check error:', err);
           // Token is invalid or expired
           localStorage.removeItem('token');
           delete axios.defaults.headers.common['Authorization'];
@@ -65,8 +66,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       setUser(user);
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to login. Please try again.');
-      throw err;
+      console.error('Login error:', err);
+      const errorMessage = err.response?.data?.message || 'Failed to login. Please try again.';
+      setError(errorMessage);
+      throw new Error(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -86,8 +89,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       setUser(user);
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to register. Please try again.');
-      throw err;
+      console.error('Registration error:', err);
+      const errorMessage = err.response?.data?.message || 'Failed to register. Please try again.';
+      setError(errorMessage);
+      throw new Error(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -98,6 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('token');
     delete axios.defaults.headers.common['Authorization'];
     setUser(null);
+    setError(null);
   };
 
   return (
