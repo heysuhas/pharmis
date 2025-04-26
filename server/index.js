@@ -155,13 +155,13 @@ app.post('/api/auth/register', async (req, res) => {
       
       // Insert user
       const [result] = await connection.query(
-        'INSERT INTO users (username, name, email, password) VALUES (?, ?, ?, ?)',
-        [name, name, email, hashedPassword]
+        'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
+        [name, email, hashedPassword]
       );
       const userId = result.insertId;
       // Create initial profile
       await connection.query('INSERT INTO profiles (user_id) VALUES (?)', [userId]);
-      
+      // test
       // Create initial emergency contact
       await connection.query(
         'INSERT INTO emergency_contacts (user_id, name, relationship, phone) VALUES (?, ?, ?, ?)',
@@ -196,7 +196,7 @@ app.post('/api/auth/register', async (req, res) => {
     // Log registration error
     await logActivity(null, 'REGISTER_ERROR', `Registration failed with error: ${error.message}`);
     console.error('Registration error:', error);
-    res.status(500).json({ message: 'Server error during registration' });
+    res.status(500).json({ message: error.message || 'Server error during registration' });
   }
 });
 

@@ -76,59 +76,30 @@ const Widget = ({ title, value, description, icon: Icon, color, change, trend }:
   </div>
 );
 
-// Sample data for charts
-const moodData = [
-  { day: 'Sun', mood: 3 },
-  { day: 'Mon', mood: 4 },
-  { day: 'Tue', mood: 2 },
-  { day: 'Wed', mood: 3 },
-  { day: 'Thu', mood: 5 },
-  { day: 'Fri', mood: 4 },
-  { day: 'Sat', mood: 3 },
-];
-
-const symptomsData = [
-  { name: 'Headache', count: 4 },
-  { name: 'Fatigue', count: 3 },
-  { name: 'Nausea', count: 2 },
-  { name: 'Anxiety', count: 3 },
-];
-
-const activityData = [
-  { name: 'Exercise', value: 45 },
-  { name: 'Sleep', value: 30 },
-  { name: 'Nutrition', value: 25 },
-];
-
-const ACTIVITY_COLORS = ['#4F46E5', '#0D9488', '#F59E0B'];
-
 export default function Dashboard() {
   const { user } = useAuth();
-  const [stats, setStats] = useState<DashboardStats>({
-    moodAverage: 3.5,
-    symptomsCount: 12,
-    logsStreak: 7,
-    filesCount: 5,
-  });
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [moodData, setMoodData] = useState<any[]>([]);
+  const [symptomsData, setSymptomsData] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
-        // In a real application, this would fetch from the API
-        // const response = await axios.get(`${API_URL}/dashboard/stats`);
-        // setStats(response.data);
-        
-        // Simulate API call delay
-        setTimeout(() => {
-          setIsLoading(false);
-        }, 1000);
+        const statsResponse = await axios.get(`${API_URL}/dashboard/stats`);
+        setStats(statsResponse.data);
+        const moodResponse = await axios.get(`${API_URL}/dashboard/mood-chart`);
+        setMoodData(moodResponse.data);
+        const symptomsResponse = await axios.get(`${API_URL}/dashboard/top-symptoms`);
+        setSymptomsData(symptomsResponse.data);
       } catch (error) {
-        console.error('Failed to fetch dashboard data', error);
+        setStats(null);
+        setMoodData([]);
+        setSymptomsData([]);
+      } finally {
         setIsLoading(false);
       }
     };
-
     fetchDashboardData();
   }, []);
 
@@ -185,126 +156,133 @@ export default function Dashboard() {
 
       {/* Stats widgets */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
-        <Widget 
-          title="Mood Average" 
-          value={stats.moodAverage.toFixed(1)} 
-          description="Based on 7-day mood logs" 
-          icon={Smile} 
-          color="bg-primary-600"
-          change="+0.5"
-          trend="up"
-        />
-        
-        <Widget 
-          title="Symptoms Logged" 
-          value={stats.symptomsCount} 
-          description="Total symptoms recorded this month" 
-          icon={ClipboardList} 
-          color="bg-secondary-600"
-          change="-3"
-          trend="down"
-        />
-        
-        <Widget 
-          title="Daily Log Streak" 
-          value={stats.logsStreak} 
-          description="Consecutive days of logging" 
-          icon={Calendar} 
-          color="bg-accent-600"
-          change="+2"
-          trend="up"
-        />
-        
-        <Widget 
-          title="Medical Files" 
-          value={stats.filesCount} 
-          description="Total documents in your records" 
-          icon={Upload} 
-          color="bg-success-600"
-        />
+        {stats ? (
+          <>
+            <Widget 
+              title="Mood Average" 
+              value={stats.moodAverage ? stats.moodAverage.toFixed(1) : '-'} 
+              description="Based on 7-day mood logs" 
+              icon={Smile} 
+              color="bg-primary-600"
+              change="+0.5"
+              trend="up"
+            />
+            <Widget 
+              title="Symptoms Logged" 
+              value={stats.symptomsCount ?? '-'} 
+              description="Total symptoms recorded this month" 
+              icon={ClipboardList} 
+              color="bg-secondary-600"
+              change="-3"
+              trend="down"
+            />
+            <Widget 
+              title="Daily Log Streak" 
+              value={stats.logsStreak ?? '-'} 
+              description="Consecutive days of logging" 
+              icon={Calendar} 
+              color="bg-accent-600"
+              change="+2"
+              trend="up"
+            />
+            <Widget 
+              title="Medical Files" 
+              value={stats.filesCount ?? '-'} 
+              description="Total documents in your records" 
+              icon={Upload} 
+              color="bg-success-600"
+            />
+          </>
+        ) : (
+          <div className="col-span-4 text-center text-neutral-400">No data yet</div>
+        )}
       </div>
 
       {/* Charts and insights */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
         {/* Mood Chart */}
-        <div className="card">
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="font-semibold">Weekly Mood Trends</h3>
-            <Link to="/insights" className="text-sm text-primary-600 hover:text-primary-700 flex items-center">
-              View details
-              <ChevronRight size={16} className="ml-1" />
-            </Link>
-          </div>
-          
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={moodData} margin={{ top: 5, right: 20, bottom: 20, left: 0 }}>
-                <XAxis dataKey="day" />
-                <YAxis domain={[0, 5]} ticks={[1, 2, 3, 4, 5]} />
-                <Tooltip />
-                <Line 
-                  type="monotone" 
-                  dataKey="mood" 
-                  stroke="#4F46E5" 
-                  strokeWidth={2}
-                  dot={{ r: 4, fill: '#4F46E5', strokeWidth: 0 }}
-                  activeDot={{ r: 6, fill: '#4F46E5', strokeWidth: 0 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-          
-          <div className="flex justify-between mt-2">
-            <div className="flex items-center">
-              <Frown className="text-error-500 mr-1" size={16} />
-              <span className="text-xs text-neutral-600">Bad</span>
+        {moodData.length > 0 && (
+          <div className="card">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="font-semibold">Weekly Mood Trends</h3>
+              <Link to="/insights" className="text-sm text-primary-600 hover:text-primary-700 flex items-center">
+                View details
+                <ChevronRight size={16} className="ml-1" />
+              </Link>
             </div>
-            <div className="flex items-center">
-              <Meh className="text-neutral-500 mr-1" size={16} />
-              <span className="text-xs text-neutral-600">Neutral</span>
+            
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={moodData} margin={{ top: 5, right: 20, bottom: 20, left: 0 }}>
+                  <XAxis dataKey="day" />
+                  <YAxis domain={[0, 5]} ticks={[1, 2, 3, 4, 5]} />
+                  <Tooltip />
+                  <Line 
+                    type="monotone" 
+                    dataKey="mood" 
+                    stroke="#4F46E5" 
+                    strokeWidth={2}
+                    dot={{ r: 4, fill: '#4F46E5', strokeWidth: 0 }}
+                    activeDot={{ r: 6, fill: '#4F46E5', strokeWidth: 0 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
-            <div className="flex items-center">
-              <Smile className="text-success-500 mr-1" size={16} />
-              <span className="text-xs text-neutral-600">Good</span>
+            
+            <div className="flex justify-between mt-2">
+              <div className="flex items-center">
+                <Frown className="text-error-500 mr-1" size={16} />
+                <span className="text-xs text-neutral-600">Bad</span>
+              </div>
+              <div className="flex items-center">
+                <Meh className="text-neutral-500 mr-1" size={16} />
+                <span className="text-xs text-neutral-600">Neutral</span>
+              </div>
+              <div className="flex items-center">
+                <Smile className="text-success-500 mr-1" size={16} />
+                <span className="text-xs text-neutral-600">Good</span>
+              </div>
             </div>
           </div>
-        </div>
+        )}
         
         {/* Top Symptoms */}
-        <div className="card">
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="font-semibold">Most Reported Symptoms</h3>
-            <Link to="/daily-log" className="text-sm text-primary-600 hover:text-primary-700 flex items-center">
-              Log symptoms
-              <ChevronRight size={16} className="ml-1" />
-            </Link>
-          </div>
-          
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={symptomsData} layout="vertical" margin={{ top: 5, right: 20, bottom: 5, left: 70 }}>
-                <XAxis type="number" domain={[0, 5]} />
-                <YAxis dataKey="name" type="category" tick={{ fontSize: 12 }} width={70} />
-                <Tooltip />
-                <Bar 
-                  dataKey="count" 
-                  fill="#4F46E5" 
-                  radius={[0, 4, 4, 0]}
-                  barSize={20}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-          
-          <div className="mt-4 pt-4 border-t border-neutral-100">
-            <h4 className="text-sm font-medium mb-2">Potential Triggers</h4>
-            <div className="flex flex-wrap gap-2">
-              <span className="text-xs py-1 px-2 bg-neutral-100 rounded-full">Stress</span>
-              <span className="text-xs py-1 px-2 bg-neutral-100 rounded-full">Lack of sleep</span>
-              <span className="text-xs py-1 px-2 bg-neutral-100 rounded-full">Dehydration</span>
+        {symptomsData.length > 0 && (
+          <div className="card">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="font-semibold">Most Reported Symptoms</h3>
+              <Link to="/daily-log" className="text-sm text-primary-600 hover:text-primary-700 flex items-center">
+                Log symptoms
+                <ChevronRight size={16} className="ml-1" />
+              </Link>
+            </div>
+            
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={symptomsData} layout="vertical" margin={{ top: 5, right: 20, bottom: 5, left: 70 }}>
+                  <XAxis type="number" domain={[0, 5]} />
+                  <YAxis dataKey="name" type="category" tick={{ fontSize: 12 }} width={70} />
+                  <Tooltip />
+                  <Bar 
+                    dataKey="count" 
+                    fill="#4F46E5" 
+                    radius={[0, 4, 4, 0]}
+                    barSize={20}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            
+            <div className="mt-4 pt-4 border-t border-neutral-100">
+              <h4 className="text-sm font-medium mb-2">Potential Triggers</h4>
+              <div className="flex flex-wrap gap-2">
+                <span className="text-xs py-1 px-2 bg-neutral-100 rounded-full">Stress</span>
+                <span className="text-xs py-1 px-2 bg-neutral-100 rounded-full">Lack of sleep</span>
+                <span className="text-xs py-1 px-2 bg-neutral-100 rounded-full">Dehydration</span>
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Recent Activity and AI Insights */}
