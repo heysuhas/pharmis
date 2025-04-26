@@ -102,7 +102,7 @@ export default function Profile() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
-  const { register, handleSubmit, control, formState: { errors } } = useForm<ProfileFormData>({
+  const { register, handleSubmit, control, setValue, formState: { errors } } = useForm<ProfileFormData>({
     resolver: zodResolver(profileSchema),
     defaultValues: {
       name: user?.name || '',
@@ -121,43 +121,35 @@ export default function Profile() {
     },
   });
 
-  useEffect(() => {
-    const fetchProfileData = async () => {
-      try {
-        setIsLoading(true);
-        const response = await axios.get('/api/profile');
-        const { allergies, conditions, medications, emergencyContact, ...profileData } = response.data;
-        
-        setAllergies(allergies || []);
-        setConditions(conditions || []);
-        setMedications(medications || []);
-        
-        // Update form with profile data
-        Object.entries(profileData).forEach(([key, value]) => {
-          if (value && key in profileSchema.shape) {
-            const field = key as keyof ProfileFormData;
-            register(field).onChange({ target: { value } });
-          }
-        });
-        
-        // Update emergency contact
-        if (emergencyContact) {
-          const emergencyContactFields = ['name', 'relationship', 'phone'] as const;
-          emergencyContactFields.forEach(field => {
-            if (emergencyContact[field]) {
-              register(`emergencyContact.${field}` as const).onChange({ 
-                target: { value: emergencyContact[field] } 
-              });
-            }
-          });
-        }
-      } catch (err: any) {
-        setError(err.response?.data?.message || 'Failed to load profile data');
-      } finally {
-        setIsLoading(false);
+  const fetchProfileData = async () => {
+    try {
+      setIsLoading(true);
+      const response = await axios.get('/api/profile');
+      const { name, email, phone, dateOfBirth, gender, height, weight, bloodType, emergencyContact, allergies, conditions, medications } = response.data;
+      setValue('name', name || '');
+      setValue('email', email || '');
+      setValue('phone', phone || '');
+      setValue('dateOfBirth', dateOfBirth || '');
+      setValue('gender', gender || '');
+      setValue('height', height || '');
+      setValue('weight', weight || '');
+      setValue('bloodType', bloodType || '');
+      if (emergencyContact) {
+        setValue('emergencyContact.name', emergencyContact.name || '');
+        setValue('emergencyContact.relationship', emergencyContact.relationship || '');
+        setValue('emergencyContact.phone', emergencyContact.phone || '');
       }
-    };
+      setAllergies(allergies || []);
+      setConditions(conditions || []);
+      setMedications(medications || []);
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to load profile data');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
+  useEffect(() => {
     if (user) {
       fetchProfileData();
     }

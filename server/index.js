@@ -90,14 +90,18 @@ pool.on('error', (err) => {
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-  
-  if (!token) return res.status(401).json({ message: 'Access denied. No token provided.' });
-  
+  if (!token) {
+    console.warn(`[AUTH] No token provided for ${req.method} ${req.originalUrl}`);
+    console.warn(`[AUTH] Headers:`, req.headers);
+    return res.status(401).json({ message: 'Access denied. No token provided.' });
+  }
   try {
     const verified = jwt.verify(token, process.env.JWT_SECRET || 'pharmis_secret_key');
     req.user = verified;
     next();
   } catch (err) {
+    console.warn(`[AUTH] Invalid token for ${req.method} ${req.originalUrl}`);
+    console.warn(`[AUTH] Headers:`, req.headers);
     res.status(401).json({ message: 'Invalid token' });
   }
 };
@@ -274,48 +278,47 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 
 // Get user profile
 app.get('/api/profile', authenticateToken, async (req, res) => {
+  console.log(`[ROUTE] GET /api/profile hit. Headers:`, req.headers);
   try {
     const userId = req.user.id;
-    
+    // Get user info (name/email)
+    const [users] = await pool.query(
+      'SELECT username AS name, email FROM users WHERE id = ?',
+      [userId]
+    );
+    const userInfo = users[0] || {};
     // Get profile data
     const [profiles] = await pool.query(
       'SELECT * FROM profiles WHERE user_id = ?',
       [userId]
     );
-    
     if (profiles.length === 0) {
       return res.status(404).json({ message: 'Profile not found' });
     }
-    
     const profile = profiles[0];
-    
     // Get emergency contact
     const [contacts] = await pool.query(
       'SELECT * FROM emergency_contacts WHERE user_id = ?',
       [userId]
     );
-    
     const emergencyContact = contacts.length > 0 ? contacts[0] : null;
-    
     // Get allergies
     const [allergies] = await pool.query(
       'SELECT name FROM allergies WHERE user_id = ?',
       [userId]
     );
-    
     // Get conditions
     const [conditions] = await pool.query(
       'SELECT name FROM medical_conditions WHERE user_id = ?',
       [userId]
     );
-    
     // Get medications
     const [medications] = await pool.query(
       'SELECT name, dosage FROM medications WHERE user_id = ?',
       [userId]
     );
-    
     res.json({
+      ...userInfo,
       ...profile,
       emergencyContact,
       allergies: allergies.map(a => a.name),
@@ -330,6 +333,7 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
 
 // Update user profile
 app.put('/api/profile', authenticateToken, async (req, res) => {
+  console.log(`[ROUTE] PUT /api/profile hit. Headers:`, req.headers);
   try {
     const userId = req.user.id;
     const {
@@ -485,14 +489,13 @@ app.post('/api/profile/allergies', authenticateToken, async (req, res) => {
 app.delete('/api/profile/allergies/:allergy', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { allergy } = req.params;
-    
+    const allergy = decodeURIComponent(req.params.allergy).trim();
     await pool.query(
-      'DELETE FROM allergies WHERE user_id = ? AND name = ?',
+      'DELETE FROM allergies WHERE user_id = ? AND LOWER(TRIM(name)) = LOWER(?)',
       [userId, allergy]
     );
-    
-    res.json({ message: 'Allergy removed successfully' });
+    const [allergiesList] = await pool.query('SELECT name FROM allergies WHERE user_id = ?', [userId]);
+    res.json({ message: 'Allergy removed successfully', allergies: allergiesList.map(a => a.name) });
   } catch (error) {
     console.error('Error removing allergy:', error);
     res.status(500).json({ message: 'Server error while removing allergy' });
@@ -523,14 +526,13 @@ app.post('/api/profile/conditions', authenticateToken, async (req, res) => {
 app.delete('/api/profile/conditions/:condition', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { condition } = req.params;
-    
+    const condition = decodeURIComponent(req.params.condition).trim();
     await pool.query(
-      'DELETE FROM medical_conditions WHERE user_id = ? AND name = ?',
+      'DELETE FROM medical_conditions WHERE user_id = ? AND LOWER(TRIM(name)) = LOWER(?)',
       [userId, condition]
     );
-    
-    res.json({ message: 'Condition removed successfully' });
+    const [conditionsList] = await pool.query('SELECT name FROM medical_conditions WHERE user_id = ?', [userId]);
+    res.json({ message: 'Condition removed successfully', conditions: conditionsList.map(c => c.name) });
   } catch (error) {
     console.error('Error removing condition:', error);
     res.status(500).json({ message: 'Server error while removing condition' });
@@ -561,14 +563,13 @@ app.post('/api/profile/medications', authenticateToken, async (req, res) => {
 app.delete('/api/profile/medications/:medication', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { medication } = req.params;
-    
+    const medication = decodeURIComponent(req.params.medication).trim();
     await pool.query(
-      'DELETE FROM medications WHERE user_id = ? AND name = ?',
+      'DELETE FROM medications WHERE user_id = ? AND LOWER(TRIM(name)) = LOWER(?)',
       [userId, medication]
     );
-    
-    res.json({ message: 'Medication removed successfully' });
+    const [medicationsList] = await pool.query('SELECT name, dosage FROM medications WHERE user_id = ?', [userId]);
+    res.json({ message: 'Medication removed successfully', medications: medicationsList.map(m => ({ name: m.name, dosage: m.dosage })) });
   } catch (error) {
     console.error('Error removing medication:', error);
     res.status(500).json({ message: 'Server error while removing medication' });
@@ -1110,7 +1111,16 @@ app.get('/api/dashboard/top-symptoms', authenticateToken, async (req, res) => {
   }
 });
 
-// Start server
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  next();
+});
+
+app.use((req, res, next) => {
+  console.warn(`[404] ${req.method} ${req.originalUrl} - Route not found`);
+  res.status(404).json({ message: 'Route not found', path: req.originalUrl });
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
