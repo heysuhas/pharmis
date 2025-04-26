@@ -227,7 +227,7 @@ app.post('/api/auth/login', async (req, res) => {
     
     // Generate token
     const token = jwt.sign(
-      { id: user.id, name: user.name, email: user.email },
+      { id: user.id, name: user.username, email: user.email },
       process.env.JWT_SECRET || 'pharmis_secret_key',
       { expiresIn: '30d' }
     );
@@ -237,7 +237,7 @@ app.post('/api/auth/login', async (req, res) => {
     
     res.json({
       token,
-      user: { id: user.id, name: user.name, email: user.email }
+      user: { id: user.id, name: user.username, email: user.email }
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -250,13 +250,20 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     
-    const [users] = await pool.query('SELECT id, name, email, created_at FROM users WHERE id = ?', [userId]);
+    const [users] = await pool.query('SELECT id, username, email, created_at FROM users WHERE id = ?', [userId]);
     
     if (users.length === 0) {
       return res.status(404).json({ message: 'User not found' });
     }
     
-    res.json(users[0]);
+    // For frontend compatibility, return 'name' as username
+    const user = users[0];
+    res.json({
+      id: user.id,
+      name: user.username,
+      email: user.email,
+      created_at: user.created_at
+    });
   } catch (error) {
     console.error('Error fetching user:', error);
     res.status(500).json({ message: 'Server error' });
@@ -347,7 +354,7 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
     try {
       // Update user info
       await connection.query(
-        'UPDATE users SET name = ?, email = ? WHERE id = ?',
+        'UPDATE users SET username = ?, email = ? WHERE id = ?',
         [name, email, userId]
       );
       
@@ -951,10 +958,10 @@ app.get('/api/insights', authenticateToken, async (req, res) => {
     const [logs] = await pool.query(
       `SELECT dl.*, 
         GROUP_CONCAT(DISTINCT s.name, ':', s.severity) as symptoms,
-        GROUP_CONCAT(DISTINCT m.name) as medications
+        GROUP_CONCAT(DISTINCT ml.name) as medications
        FROM daily_logs dl
        LEFT JOIN symptoms s ON s.daily_log_id = dl.id
-       LEFT JOIN medications m ON m.daily_log_id = dl.id
+       LEFT JOIN medication_logs ml ON ml.daily_log_id = dl.id
        WHERE dl.user_id = ? AND dl.date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
        GROUP BY dl.id
        ORDER BY dl.date DESC`,
@@ -983,7 +990,7 @@ app.get('/api/insights', authenticateToken, async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: "mixtral-8x7b-32768",
+        model: "llama3-70b-8192",
         messages: [{
           role: "system",
           content: "You are a health analysis AI that generates insights from health data. Focus on identifying patterns, correlations, and actionable recommendations."
@@ -997,18 +1004,24 @@ app.get('/api/insights', authenticateToken, async (req, res) => {
     });
 
     const groqResult = await response.json();
+    if (!groqResult.choices || !Array.isArray(groqResult.choices) || !groqResult.choices[0]?.message?.content) {
+      console.error('Groq API error or unexpected response:', groqResult);
+      return res.status(500).json({ message: 'AI service error: Unable to generate insights at this time.' });
+    }
     const aiAnalysis = groqResult.choices[0].message.content;
 
     // Parse AI response and store insights
     const insights = aiAnalysis.split('\n')
       .filter(line => line.trim().length > 0)
-      .map((insight, index) => ({
-        id: Date.now() + index,
-        title: insight.split(':')[0].trim(),
-        content: insight.split(':')[1]?.trim() || insight,
-        category: determineCategory(insight),
-        generated_date: new Date().toISOString()
-      }));
+      .map((insight, index) => {
+        const title = insight.split(':')[0].trim().slice(0, 255);
+        const content = (insight.split(':')[1]?.trim() || insight).slice(0, 10000); // truncate if needed
+        const category = determineCategory(insight);
+        // Format date for MySQL DATETIME (YYYY-MM-DD HH:MM:SS)
+        const generated_date = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        return { id: Date.now() + index, title, content, category, generated_date };
+      })
+      .filter(insight => !insight.title.toLowerCase().includes('no health data provided'));
 
     // Store insights in database
     for (const insight of insights) {
