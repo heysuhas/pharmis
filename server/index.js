@@ -346,18 +346,24 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
       conditions,
       medications
     } = req.body;
-    
+
+    // Validate required fields
+    if (!name || !email) {
+      return res.status(400).json({ message: 'Name and email are required.' });
+    }
+
+    // Log received payload for debugging
+    console.log('Profile update payload:', req.body);
+
     // Start a transaction
     const connection = await pool.getConnection();
     await connection.beginTransaction();
-    
     try {
       // Update user info
       await connection.query(
         'UPDATE users SET username = ?, email = ? WHERE id = ?',
         [name, email, userId]
       );
-      
       // Update profile
       await connection.query(
         `UPDATE profiles SET 
@@ -369,80 +375,80 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
           blood_type = ?
         WHERE user_id = ?`,
         [
-          phone,
-          dateOfBirth,
-          gender,
-          height,
-          weight,
-          bloodType,
+          phone || null,
+          dateOfBirth || null,
+          gender || null,
+          height || null,
+          weight || null,
+          bloodType || null,
           userId
         ]
       );
-      
       // Update emergency contact
       if (emergencyContact) {
-        const { name, relationship, phone } = emergencyContact;
-        
-        // Check if emergency contact exists
+        const { name: ecName, relationship, phone: ecPhone } = emergencyContact;
         const [existingContacts] = await connection.query(
           'SELECT id FROM emergency_contacts WHERE user_id = ?',
           [userId]
         );
-        
         if (existingContacts.length > 0) {
           await connection.query(
             'UPDATE emergency_contacts SET name = ?, relationship = ?, phone = ? WHERE user_id = ?',
-            [name, relationship, phone, userId]
+            [ecName || '', relationship || '', ecPhone || '', userId]
           );
         } else {
           await connection.query(
             'INSERT INTO emergency_contacts (user_id, name, relationship, phone) VALUES (?, ?, ?, ?)',
-            [userId, name, relationship, phone]
+            [userId, ecName || '', relationship || '', ecPhone || '']
           );
         }
       }
-      
       // Update allergies
       await connection.query('DELETE FROM allergies WHERE user_id = ?', [userId]);
-      if (allergies?.length > 0) {
+      if (Array.isArray(allergies) && allergies.length > 0) {
         const allergyValues = allergies.map(allergy => [userId, allergy]);
         await connection.query(
           'INSERT INTO allergies (user_id, name) VALUES ?',
           [allergyValues]
         );
       }
-      
       // Update conditions
       await connection.query('DELETE FROM medical_conditions WHERE user_id = ?', [userId]);
-      if (conditions?.length > 0) {
+      if (Array.isArray(conditions) && conditions.length > 0) {
         const conditionValues = conditions.map(condition => [userId, condition]);
         await connection.query(
           'INSERT INTO medical_conditions (user_id, name) VALUES ?',
           [conditionValues]
         );
       }
-      
       // Update medications
       await connection.query('DELETE FROM medications WHERE user_id = ?', [userId]);
-      if (medications?.length > 0) {
+      if (Array.isArray(medications) && medications.length > 0) {
         const medicationValues = medications.map(med => [
           userId, 
           typeof med === 'string' ? med : med.name, 
           typeof med === 'string' ? null : med.dosage
         ]);
-        
         await connection.query(
           'INSERT INTO medications (user_id, name, dosage) VALUES ?',
           [medicationValues]
         );
       }
-      
       await connection.commit();
-      
-      // Log activity
       await logActivity(userId, 'PROFILE_UPDATE', 'User updated their profile information');
-      
-      res.json({ message: 'Profile updated successfully' });
+      // Return updated profile
+      const [profiles] = await pool.query('SELECT * FROM profiles WHERE user_id = ?', [userId]);
+      const [contacts] = await pool.query('SELECT * FROM emergency_contacts WHERE user_id = ?', [userId]);
+      const [allergiesList] = await pool.query('SELECT name FROM allergies WHERE user_id = ?', [userId]);
+      const [conditionsList] = await pool.query('SELECT name FROM medical_conditions WHERE user_id = ?', [userId]);
+      const [medicationsList] = await pool.query('SELECT name, dosage FROM medications WHERE user_id = ?', [userId]);
+      res.json({
+        ...profiles[0],
+        emergencyContact: contacts.length > 0 ? contacts[0] : null,
+        allergies: allergiesList.map(a => a.name),
+        conditions: conditionsList.map(c => c.name),
+        medications: medicationsList.map(m => ({ name: m.name, dosage: m.dosage }))
+      });
     } catch (error) {
       await connection.rollback();
       throw error;
@@ -455,17 +461,21 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
   }
 });
 
+// Add allergy
 app.post('/api/profile/allergies', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const { allergy } = req.body;
-    
+    if (!allergy) {
+      return res.status(400).json({ message: 'Allergy name is required.' });
+    }
     await pool.query(
       'INSERT INTO allergies (user_id, name) VALUES (?, ?)',
       [userId, allergy]
     );
-    
-    res.status(201).json({ message: 'Allergy added successfully' });
+    // Return updated list
+    const [allergiesList] = await pool.query('SELECT name FROM allergies WHERE user_id = ?', [userId]);
+    res.status(201).json({ message: 'Allergy added successfully', allergies: allergiesList.map(a => a.name) });
   } catch (error) {
     console.error('Error adding allergy:', error);
     res.status(500).json({ message: 'Server error while adding allergy' });
@@ -489,17 +499,21 @@ app.delete('/api/profile/allergies/:allergy', authenticateToken, async (req, res
   }
 });
 
+// Add condition
 app.post('/api/profile/conditions', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const { condition } = req.body;
-    
+    if (!condition) {
+      return res.status(400).json({ message: 'Condition name is required.' });
+    }
     await pool.query(
       'INSERT INTO medical_conditions (user_id, name) VALUES (?, ?)',
       [userId, condition]
     );
-    
-    res.status(201).json({ message: 'Condition added successfully' });
+    // Return updated list
+    const [conditionsList] = await pool.query('SELECT name FROM medical_conditions WHERE user_id = ?', [userId]);
+    res.status(201).json({ message: 'Condition added successfully', conditions: conditionsList.map(c => c.name) });
   } catch (error) {
     console.error('Error adding condition:', error);
     res.status(500).json({ message: 'Server error while adding condition' });
@@ -523,17 +537,21 @@ app.delete('/api/profile/conditions/:condition', authenticateToken, async (req, 
   }
 });
 
+// Add medication
 app.post('/api/profile/medications', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const { medication } = req.body;
-    
+    if (!medication || !medication.name) {
+      return res.status(400).json({ message: 'Medication name is required.' });
+    }
     await pool.query(
       'INSERT INTO medications (user_id, name, dosage) VALUES (?, ?, ?)',
-      [userId, medication.name, medication.dosage]
+      [userId, medication.name, medication.dosage || null]
     );
-    
-    res.status(201).json({ message: 'Medication added successfully' });
+    // Return updated list
+    const [medicationsList] = await pool.query('SELECT name, dosage FROM medications WHERE user_id = ?', [userId]);
+    res.status(201).json({ message: 'Medication added successfully', medications: medicationsList.map(m => ({ name: m.name, dosage: m.dosage })) });
   } catch (error) {
     console.error('Error adding medication:', error);
     res.status(500).json({ message: 'Server error while adding medication' });

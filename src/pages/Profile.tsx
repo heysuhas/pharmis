@@ -166,9 +166,10 @@ export default function Profile() {
   const addAllergy = async () => {
     if (newAllergy.trim()) {
       try {
-        await axios.post('/api/profile/allergies', { allergy: newAllergy });
-        setAllergies([...allergies, newAllergy]);
+        const res = await axios.post('/api/profile/allergies', { allergy: newAllergy });
+        setAllergies(res.data.allergies || []);
         setNewAllergy('');
+        await fetchProfileData();
       } catch (err: any) {
         setError(err.response?.data?.message || 'Failed to add allergy');
       }
@@ -178,7 +179,7 @@ export default function Profile() {
   const removeAllergy = async (index: number) => {
     try {
       await axios.delete(`/api/profile/allergies/${allergies[index]}`);
-      setAllergies(allergies.filter((_, i) => i !== index));
+      await fetchProfileData();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to remove allergy');
     }
@@ -187,9 +188,10 @@ export default function Profile() {
   const addCondition = async () => {
     if (newCondition.trim()) {
       try {
-        await axios.post('/api/profile/conditions', { condition: newCondition });
-        setConditions([...conditions, newCondition]);
+        const res = await axios.post('/api/profile/conditions', { condition: newCondition });
+        setConditions(res.data.conditions || []);
         setNewCondition('');
+        await fetchProfileData();
       } catch (err: any) {
         setError(err.response?.data?.message || 'Failed to add condition');
       }
@@ -199,7 +201,7 @@ export default function Profile() {
   const removeCondition = async (index: number) => {
     try {
       await axios.delete(`/api/profile/conditions/${conditions[index]}`);
-      setConditions(conditions.filter((_, i) => i !== index));
+      await fetchProfileData();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to remove condition');
     }
@@ -208,18 +210,16 @@ export default function Profile() {
   const addMedication = async () => {
     if (newMedication.trim()) {
       try {
-        await axios.post('/api/profile/medications', { 
+        const res = await axios.post('/api/profile/medications', { 
           medication: {
             name: newMedication,
             dosage: newMedicationDosage.trim() || undefined
           }
         });
-        setMedications([...medications, { 
-          name: newMedication, 
-          dosage: newMedicationDosage.trim() || undefined 
-        }]);
+        setMedications(res.data.medications || []);
         setNewMedication('');
         setNewMedicationDosage('');
+        await fetchProfileData();
       } catch (err: any) {
         setError(err.response?.data?.message || 'Failed to add medication');
       }
@@ -229,7 +229,7 @@ export default function Profile() {
   const removeMedication = async (index: number) => {
     try {
       await axios.delete(`/api/profile/medications/${medications[index].name}`);
-      setMedications(medications.filter((_, i) => i !== index));
+      await fetchProfileData();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to remove medication');
     }
@@ -239,16 +239,15 @@ export default function Profile() {
     try {
       setIsSubmitting(true);
       setError(null);
-      
       await axios.put('/api/profile', {
         ...data,
         allergies,
         conditions,
         medications
       });
-      
       setSubmitSuccess(true);
       setTimeout(() => setSubmitSuccess(false), 3000);
+      await fetchProfileData();
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to update profile');
     } finally {
