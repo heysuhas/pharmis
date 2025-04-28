@@ -26,11 +26,11 @@ const profileSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
   email: z.string().email('Please enter a valid email'),
   phone: z.string().optional(),
-  dateOfBirth: z.string().optional(),
+  date_of_birth: z.string().optional(),
   gender: z.string().optional(),
   height: z.string().optional(),
   weight: z.string().optional(),
-  bloodType: z.string().optional(),
+  blood_type: z.string().optional(),
   emergencyContact: z.object({
     name: z.string().optional(),
     relationship: z.string().optional(),
@@ -108,11 +108,11 @@ export default function Profile() {
       name: user?.name || '',
       email: user?.email || '',
       phone: '',
-      dateOfBirth: '',
+      date_of_birth: '',
       gender: '',
       height: '',
       weight: '',
-      bloodType: '',
+      blood_type: '',
       emergencyContact: {
         name: '',
         relationship: '',
@@ -125,15 +125,15 @@ export default function Profile() {
     try {
       setIsLoading(true);
       const response = await axios.get('/api/profile');
-      const { name, email, phone, dateOfBirth, gender, height, weight, bloodType, emergencyContact, allergies, conditions, medications } = response.data;
+      const { name, email, phone, date_of_birth, gender, height, weight, blood_type, emergencyContact, allergies, conditions, medications } = response.data;
       setValue('name', name || '');
       setValue('email', email || '');
       setValue('phone', phone || '');
-      setValue('dateOfBirth', dateOfBirth || '');
+      setValue('date_of_birth', date_of_birth || '');
       setValue('gender', gender || '');
       setValue('height', height || '');
       setValue('weight', weight || '');
-      setValue('bloodType', bloodType || '');
+      setValue('blood_type', blood_type || '');
       if (emergencyContact) {
         setValue('emergencyContact.name', emergencyContact.name || '');
         setValue('emergencyContact.relationship', emergencyContact.relationship || '');
@@ -338,14 +338,14 @@ export default function Profile() {
             </div>
             
             <div>
-              <label htmlFor="dateOfBirth" className="form-label">Date of Birth</label>
+              <label htmlFor="date_of_birth" className="form-label">Date of Birth</label>
               <div className="relative">
                 <Calendar className="absolute left-3 top-2.5 h-5 w-5 text-neutral-400" />
                 <input
-                  id="dateOfBirth"
+                  id="date_of_birth"
                   type="date"
                   className="input pl-10"
-                  {...register('dateOfBirth')}
+                  {...register('date_of_birth')}
                 />
               </div>
             </div>
@@ -366,11 +366,11 @@ export default function Profile() {
             </div>
             
             <div>
-              <label htmlFor="bloodType" className="form-label">Blood Type</label>
+              <label htmlFor="blood_type" className="form-label">Blood Type</label>
               <select
-                id="bloodType"
+                id="blood_type"
                 className="input"
-                {...register('bloodType')}
+                {...register('blood_type')}
               >
                 <option value="">Select blood type</option>
                 <option value="A+">A+</option>

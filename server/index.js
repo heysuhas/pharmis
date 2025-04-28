@@ -340,11 +340,11 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
       name,
       email,
       phone,
-      dateOfBirth,
+      date_of_birth,
       gender,
       height,
       weight,
-      bloodType,
+      blood_type,
       emergencyContact,
       allergies,
       conditions,
@@ -380,11 +380,11 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
         WHERE user_id = ?`,
         [
           phone || null,
-          dateOfBirth || null,
+          date_of_birth || null,
           gender || null,
           height || null,
           weight || null,
-          bloodType || null,
+          blood_type || null,
           userId
         ]
       );
