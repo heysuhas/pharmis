@@ -115,12 +115,8 @@ export default function DailyLog() {
           .map(({ id, ...medication }) => medication),
       };
       
-      // In a real application, this would send to the API
-      // await axios.post(`${API_URL}/logs`, formattedData);
-      
-      // Simulate API call
-      console.log('Submitting data:', formattedData);
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Send to the API
+      await axios.post(`${API_URL}/logs`, formattedData);
       
       setSubmitSuccess(true);
       setTimeout(() => setSubmitSuccess(false), 3000);

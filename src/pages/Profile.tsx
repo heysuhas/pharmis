@@ -125,7 +125,22 @@ export default function Profile() {
     try {
       setIsLoading(true);
       const response = await axios.get('/api/profile');
-      const { name, email, phone, date_of_birth, gender, height, weight, blood_type, emergencyContact, allergies, conditions, medications } = response.data;
+      const { 
+        name, 
+        email, 
+        phone, 
+        date_of_birth, 
+        gender, 
+        height, 
+        weight, 
+        blood_type, 
+        emergencyContact, 
+        allergies: userAllergies, 
+        conditions: userConditions, 
+        medications: userMedications 
+      } = response.data;
+
+      // Set form values
       setValue('name', name || '');
       setValue('email', email || '');
       setValue('phone', phone || '');
@@ -134,15 +149,20 @@ export default function Profile() {
       setValue('height', height || '');
       setValue('weight', weight || '');
       setValue('blood_type', blood_type || '');
+
+      // Set emergency contact
       if (emergencyContact) {
         setValue('emergencyContact.name', emergencyContact.name || '');
         setValue('emergencyContact.relationship', emergencyContact.relationship || '');
         setValue('emergencyContact.phone', emergencyContact.phone || '');
       }
-      setAllergies(allergies || []);
-      setConditions(conditions || []);
-      setMedications(medications || []);
+
+      // Set arrays
+      setAllergies(userAllergies || []);
+      setConditions(userConditions || []);
+      setMedications(userMedications || []);
     } catch (err: any) {
+      console.error('Error fetching profile:', err);
       setError(err.response?.data?.message || 'Failed to load profile data');
     } finally {
       setIsLoading(false);
@@ -227,23 +247,38 @@ export default function Profile() {
     }
   };
 
-  const onSubmit = async (data: ProfileFormData) => {
+  const onSubmit = async (data: any) => {
     try {
-      setIsSubmitting(true);
+      setIsLoading(true);
       setError(null);
-      await axios.put('/api/profile', {
+      
+      // Format the data for submission
+      const formattedData = {
         ...data,
-        allergies,
-        conditions,
-        medications
-      });
+        allergies: allergies,
+        conditions: conditions,
+        medications: medications.map(med => ({
+          name: med.name,
+          dosage: med.dosage || null
+        }))
+      };
+
+      console.log('Submitting profile data:', formattedData);
+      
+      const response = await axios.put('/api/profile', formattedData);
+      console.log('Profile update response:', response.data);
+      
+      // Show success message
       setSubmitSuccess(true);
       setTimeout(() => setSubmitSuccess(false), 3000);
+      
+      // Refresh profile data
       await fetchProfileData();
     } catch (err: any) {
+      console.error('Error updating profile:', err);
       setError(err.response?.data?.message || 'Failed to update profile');
     } finally {
-      setIsSubmitting(false);
+      setIsLoading(false);
     }
   };
 

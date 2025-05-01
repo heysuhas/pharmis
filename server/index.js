@@ -368,6 +368,7 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
         'UPDATE users SET username = ?, email = ? WHERE id = ?',
         [name, email, userId]
       );
+
       // Update profile
       await connection.query(
         `UPDATE profiles SET 
@@ -388,71 +389,62 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
           userId
         ]
       );
+
       // Update emergency contact
       if (emergencyContact) {
-        const { name: ecName, relationship, phone: ecPhone } = emergencyContact;
-        const [existingContacts] = await connection.query(
-          'SELECT id FROM emergency_contacts WHERE user_id = ?',
-          [userId]
+        await connection.query(
+          `UPDATE emergency_contacts SET 
+            name = ?,
+            relationship = ?,
+            phone = ?
+          WHERE user_id = ?`,
+          [
+            emergencyContact.name || null,
+            emergencyContact.relationship || null,
+            emergencyContact.phone || null,
+            userId
+          ]
         );
-        if (existingContacts.length > 0) {
+      }
+
+      // Update allergies
+      if (allergies) {
+        await connection.query('DELETE FROM allergies WHERE user_id = ?', [userId]);
+        if (allergies.length > 0) {
+          const allergyValues = allergies.map(allergy => [userId, allergy]);
           await connection.query(
-            'UPDATE emergency_contacts SET name = ?, relationship = ?, phone = ? WHERE user_id = ?',
-            [ecName || '', relationship || '', ecPhone || '', userId]
-          );
-        } else {
-          await connection.query(
-            'INSERT INTO emergency_contacts (user_id, name, relationship, phone) VALUES (?, ?, ?, ?)',
-            [userId, ecName || '', relationship || '', ecPhone || '']
+            'INSERT INTO allergies (user_id, name) VALUES ?',
+            [allergyValues]
           );
         }
       }
-      // Update allergies
-      await connection.query('DELETE FROM allergies WHERE user_id = ?', [userId]);
-      if (Array.isArray(allergies) && allergies.length > 0) {
-        const allergyValues = allergies.map(allergy => [userId, allergy]);
-        await connection.query(
-          'INSERT INTO allergies (user_id, name) VALUES ?',
-          [allergyValues]
-        );
-      }
+
       // Update conditions
-      await connection.query('DELETE FROM medical_conditions WHERE user_id = ?', [userId]);
-      if (Array.isArray(conditions) && conditions.length > 0) {
-        const conditionValues = conditions.map(condition => [userId, condition]);
-        await connection.query(
-          'INSERT INTO medical_conditions (user_id, name) VALUES ?',
-          [conditionValues]
-        );
+      if (conditions) {
+        await connection.query('DELETE FROM medical_conditions WHERE user_id = ?', [userId]);
+        if (conditions.length > 0) {
+          const conditionValues = conditions.map(condition => [userId, condition]);
+          await connection.query(
+            'INSERT INTO medical_conditions (user_id, name) VALUES ?',
+            [conditionValues]
+          );
+        }
       }
+
       // Update medications
-      await connection.query('DELETE FROM medications WHERE user_id = ?', [userId]);
-      if (Array.isArray(medications) && medications.length > 0) {
-        const medicationValues = medications.map(med => [
-          userId, 
-          typeof med === 'string' ? med : med.name, 
-          typeof med === 'string' ? null : med.dosage
-        ]);
-        await connection.query(
-          'INSERT INTO medications (user_id, name, dosage) VALUES ?',
-          [medicationValues]
-        );
+      if (medications) {
+        await connection.query('DELETE FROM medications WHERE user_id = ?', [userId]);
+        if (medications.length > 0) {
+          const medicationValues = medications.map(med => [userId, med.name, med.dosage || null]);
+          await connection.query(
+            'INSERT INTO medications (user_id, name, dosage) VALUES ?',
+            [medicationValues]
+          );
+        }
       }
+
       await connection.commit();
-      await logActivity(userId, 'PROFILE_UPDATE', 'User updated their profile information');
-      // Return updated profile
-      const [profiles] = await pool.query('SELECT * FROM profiles WHERE user_id = ?', [userId]);
-      const [contacts] = await pool.query('SELECT * FROM emergency_contacts WHERE user_id = ?', [userId]);
-      const [allergiesList] = await pool.query('SELECT name FROM allergies WHERE user_id = ?', [userId]);
-      const [conditionsList] = await pool.query('SELECT name FROM medical_conditions WHERE user_id = ?', [userId]);
-      const [medicationsList] = await pool.query('SELECT name, dosage FROM medications WHERE user_id = ?', [userId]);
-      res.json({
-        ...profiles[0],
-        emergencyContact: contacts.length > 0 ? contacts[0] : null,
-        allergies: allergiesList.map(a => a.name),
-        conditions: conditionsList.map(c => c.name),
-        medications: medicationsList.map(m => ({ name: m.name, dosage: m.dosage }))
-      });
+      res.json({ message: 'Profile updated successfully' });
     } catch (error) {
       await connection.rollback();
       throw error;
@@ -1108,6 +1100,60 @@ app.get('/api/dashboard/top-symptoms', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error fetching top symptoms:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get dashboard stats
+app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Get total daily logs
+    const [logsCount] = await pool.query(
+      'SELECT COUNT(*) as count FROM daily_logs WHERE user_id = ?',
+      [userId]
+    );
+    
+    // Get total medications
+    const [medsCount] = await pool.query(
+      'SELECT COUNT(*) as count FROM medications WHERE user_id = ?',
+      [userId]
+    );
+    
+    // Get total conditions
+    const [conditionsCount] = await pool.query(
+      'SELECT COUNT(*) as count FROM medical_conditions WHERE user_id = ?',
+      [userId]
+    );
+    
+    // Get total allergies
+    const [allergiesCount] = await pool.query(
+      'SELECT COUNT(*) as count FROM allergies WHERE user_id = ?',
+      [userId]
+    );
+    
+    // Get recent activity
+    const [recentActivity] = await pool.query(
+      `SELECT activity_type, description, created_at 
+       FROM activity_logs 
+       WHERE user_id = ? 
+       ORDER BY created_at DESC 
+       LIMIT 5`,
+      [userId]
+    );
+    
+    res.json({
+      stats: {
+        totalLogs: logsCount[0].count,
+        totalMedications: medsCount[0].count,
+        totalConditions: conditionsCount[0].count,
+        totalAllergies: allergiesCount[0].count
+      },
+      recentActivity
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({ message: 'Server error while fetching dashboard stats' });
   }
 });
 
