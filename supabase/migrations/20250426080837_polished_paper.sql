@@ -145,18 +145,19 @@ CREATE TABLE IF NOT EXISTS lifestyle_logs (
 -- -----------------------------------------------------
 -- Table medical_files
 -- -----------------------------------------------------
-CREATE TABLE IF NOT EXISTS medical_files (
+DROP TABLE IF EXISTS medical_files;
+CREATE TABLE medical_files (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
   name VARCHAR(255) NOT NULL,
   original_name VARCHAR(255) NOT NULL,
-  file_path VARCHAR(255) NOT NULL,
+  file_data LONGBLOB NOT NULL,
   file_size INT NOT NULL,
   file_type VARCHAR(100) NOT NULL,
   category VARCHAR(100) NOT NULL,
   upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------
 -- Table health_insights

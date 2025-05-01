@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   FileText, 
@@ -15,45 +15,21 @@ import {
   ChevronRight,
   ChevronLeft
 } from 'lucide-react';
-import { FILE_CATEGORIES, MAX_FILE_SIZE } from '../config/constants';
+import { FILE_CATEGORIES, MAX_FILE_SIZE, API_URL } from '../config/constants';
+import axios from 'axios';
 
 interface MedicalFile {
-  id: string;
+  id: number;
   name: string;
+  original_name: string;
+  file_size: number;
+  file_type: string;
   category: string;
-  date: string;
-  size: number;
-  url: string;
+  upload_date: string;
 }
 
 export default function MedicalFiles() {
-  const [files, setFiles] = useState<MedicalFile[]>([
-    {
-      id: '1',
-      name: 'Blood Test Results.pdf',
-      category: 'Lab Results',
-      date: '2023-05-15',
-      size: 1024 * 1024, // 1MB
-      url: '#',
-    },
-    {
-      id: '2',
-      name: 'X-Ray Report.pdf',
-      category: 'Imaging Reports',
-      date: '2023-06-22',
-      size: 2.5 * 1024 * 1024, // 2.5MB
-      url: '#',
-    },
-    {
-      id: '3',
-      name: 'Doctor Consultation Notes.docx',
-      category: 'Medical Records',
-      date: '2023-07-10',
-      size: 512 * 1024, // 512KB
-      url: '#',
-    },
-  ]);
-  
+  const [files, setFiles] = useState<MedicalFile[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<MedicalFile | null>(null);
@@ -62,8 +38,26 @@ export default function MedicalFiles() {
   const [newFile, setNewFile] = useState<File | null>(null);
   const [newFileCategory, setNewFileCategory] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch files on component mount
+  useEffect(() => {
+    fetchFiles();
+  }, []);
+
+  const fetchFiles = async () => {
+    try {
+      setIsLoading(true);
+      const response = await axios.get(`${API_URL}/files`);
+      setFiles(response.data);
+    } catch (error) {
+      console.error('Error fetching files:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // Filter files based on search query and category
   const filteredFiles = files.filter(file => {
@@ -93,40 +87,69 @@ export default function MedicalFiles() {
     }
   };
 
-  const handleUpload = () => {
+  const handleUpload = async () => {
     if (!newFile || !newFileCategory) {
       setUploadError('Please select a file and category');
       return;
     }
     
-    // Create a new file entry
-    const newFileEntry: MedicalFile = {
-      id: Date.now().toString(),
-      name: newFile.name,
-      category: newFileCategory,
-      date: new Date().toISOString().split('T')[0],
-      size: newFile.size,
-      url: '#', // In a real app, this would be the URL from the server
-    };
-    
-    // Add the new file to the list
-    setFiles([newFileEntry, ...files]);
-    
-    // Reset form and close modal
-    setNewFile(null);
-    setNewFileCategory('');
-    setShowUploadModal(false);
-    
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+    try {
+      const formData = new FormData();
+      formData.append('file', newFile);
+      formData.append('category', newFileCategory);
+      
+      await axios.post(`${API_URL}/files`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      
+      // Refresh files list
+      await fetchFiles();
+      
+      // Reset form and close modal
+      setNewFile(null);
+      setNewFileCategory('');
+      setShowUploadModal(false);
+      
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    } catch (error) {
+      console.error('Error uploading file:', error);
+      setUploadError('Failed to upload file. Please try again.');
     }
   };
 
-  const handleDeleteFile = () => {
+  const handleDeleteFile = async () => {
     if (selectedFile) {
-      setFiles(files.filter(file => file.id !== selectedFile.id));
-      setSelectedFile(null);
-      setShowDeleteConfirm(false);
+      try {
+        await axios.delete(`${API_URL}/files/${selectedFile.id}`);
+        await fetchFiles();
+        setSelectedFile(null);
+        setShowDeleteConfirm(false);
+      } catch (error) {
+        console.error('Error deleting file:', error);
+      }
+    }
+  };
+
+  const handleDownload = async (file: MedicalFile) => {
+    try {
+      const response = await axios.get(`${API_URL}/files/${file.id}/download`, {
+        responseType: 'blob'
+      });
+      
+      // Create a blob URL and trigger download
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', file.name);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (error) {
+      console.error('Error downloading file:', error);
     }
   };
 
@@ -226,7 +249,7 @@ export default function MedicalFiles() {
                     <td className="py-3 pl-4 pr-2">
                       <div className="flex items-center">
                         <FileText size={16} className="text-primary-500 mr-2" />
-                        <span className="font-medium">{file.name}</span>
+                        <span className="font-medium">{file.original_name}</span>
                       </div>
                     </td>
                     <td className="py-3 px-2">
@@ -235,16 +258,17 @@ export default function MedicalFiles() {
                       </span>
                     </td>
                     <td className="py-3 px-2 text-neutral-600">
-                      {new Date(file.date).toLocaleDateString()}
+                      {new Date(file.upload_date).toLocaleDateString()}
                     </td>
                     <td className="py-3 px-2 text-neutral-600">
-                      {formatFileSize(file.size)}
+                      {formatFileSize(file.file_size)}
                     </td>
                     <td className="py-3 px-2 text-right">
                       <div className="flex justify-end gap-2">
                         <button
                           className="p-1.5 hover:bg-neutral-100 rounded-full"
                           title="Download"
+                          onClick={() => handleDownload(file)}
                         >
                           <Download size={16} className="text-neutral-600" />
                         </button>
@@ -449,9 +473,9 @@ export default function MedicalFiles() {
                   <div className="w-16 h-16 bg-primary-100 rounded-full flex items-center justify-center mx-auto mb-3">
                     <FileText size={28} className="text-primary-600" />
                   </div>
-                  <h3 className="font-medium mb-1">{selectedFile.name}</h3>
+                  <h3 className="font-medium mb-1">{selectedFile.original_name}</h3>
                   <p className="text-sm text-neutral-500">
-                    {formatFileSize(selectedFile.size)}
+                    {formatFileSize(selectedFile.file_size)}
                   </p>
                 </div>
                 
@@ -463,13 +487,13 @@ export default function MedicalFiles() {
                   
                   <div className="p-4 bg-neutral-50 rounded-lg">
                     <p className="text-sm text-neutral-500 mb-1">Upload Date</p>
-                    <p className="font-medium">{new Date(selectedFile.date).toLocaleDateString()}</p>
+                    <p className="font-medium">{new Date(selectedFile.upload_date).toLocaleDateString()}</p>
                   </div>
                   
                   <div className="p-4 bg-neutral-50 rounded-lg">
                     <p className="text-sm text-neutral-500 mb-1">File Type</p>
                     <p className="font-medium">
-                      {selectedFile.name.split('.').pop()?.toUpperCase()}
+                      {selectedFile.file_type.split('/')[1]?.toUpperCase() || selectedFile.original_name.split('.').pop()?.toUpperCase()}
                     </p>
                   </div>
                 </div>
@@ -478,7 +502,7 @@ export default function MedicalFiles() {
               <div className="mt-6 pt-6 border-t border-neutral-200">
                 <button
                   className="btn btn-primary w-full mb-3"
-                  onClick={() => window.open(selectedFile.url, '_blank')}
+                  onClick={() => handleDownload(selectedFile)}
                 >
                   <Download size={16} className="mr-2" />
                   Download
@@ -518,7 +542,7 @@ export default function MedicalFiles() {
                 </div>
                 <h2 className="text-xl font-semibold mb-2">Delete File</h2>
                 <p className="text-neutral-600">
-                  Are you sure you want to delete "{selectedFile?.name}"? This action cannot be undone.
+                  Are you sure you want to delete "{selectedFile?.original_name}"? This action cannot be undone.
                 </p>
               </div>
               

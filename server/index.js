@@ -33,19 +33,15 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 // Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueFilename = `${uuidv4()}-${file.originalname}`;
-    cb(null, uniqueFilename);
-  }
-});
+const storage = multer.memoryStorage();
 
 const upload = multer({ 
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    // Accept all file types
+    cb(null, true);
+  }
 });
 
 // Database connection pool
@@ -63,8 +59,27 @@ const pool = mysql.createPool(dbConfig);
 
 // Test database connection
 pool.getConnection()
-  .then(connection => {
+  .then(async (connection) => {
     console.log('Database connected successfully');
+    
+    // Check and update medical_files table
+    try {
+      // Check if file_data column exists
+      const [columns] = await connection.query(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'medical_files' AND COLUMN_NAME = 'file_data'"
+      );
+      
+      if (columns.length === 0) {
+        console.log('Adding file_data column to medical_files table...');
+        await connection.query(
+          'ALTER TABLE medical_files ADD COLUMN file_data LONGBLOB NOT NULL AFTER original_name'
+        );
+        console.log('file_data column added successfully');
+      }
+    } catch (error) {
+      console.error('Error updating medical_files table:', error);
+    }
+    
     connection.release();
   })
   .catch(err => {
@@ -860,14 +875,21 @@ app.post('/api/files', authenticateToken, upload.single('file'), async (req, res
       return res.status(400).json({ message: 'No file uploaded' });
     }
     
-    const { filename, originalname, mimetype, size, path: filePath } = req.file;
+    const { originalname, mimetype, size, buffer } = req.file;
+    
+    console.log('Uploading file:', {
+      name: originalname,
+      type: mimetype,
+      size: size,
+      category: category
+    });
     
     // Insert file record
     const [result] = await pool.query(
       `INSERT INTO medical_files 
-       (user_id, name, original_name, file_path, file_size, file_type, category) 
+       (user_id, name, original_name, file_data, file_size, file_type, category) 
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [userId, filename, originalname, filePath, size, mimetype, category]
+      [userId, originalname, originalname, buffer, size, mimetype, category]
     );
     
     // Log activity
@@ -875,13 +897,20 @@ app.post('/api/files', authenticateToken, upload.single('file'), async (req, res
     
     res.status(201).json({ 
       id: result.insertId, 
-      name: filename,
+      name: originalname,
       original_name: originalname,
       category,
       message: 'File uploaded successfully' 
     });
   } catch (error) {
     console.error('Error uploading file:', error);
+    if (error.code === 'ER_BAD_FIELD_ERROR') {
+      console.error('Database schema error:', error.sqlMessage);
+      return res.status(500).json({ 
+        message: 'Database configuration error. Please contact support.',
+        details: error.sqlMessage
+      });
+    }
     res.status(500).json({ message: 'Server error during file upload' });
   }
 });
@@ -907,8 +936,12 @@ app.get('/api/files/:id/download', authenticateToken, async (req, res) => {
     // Log activity
     await logActivity(userId, 'FILE_DOWNLOAD', `User downloaded a medical file: ${file.original_name}`);
     
-    // Send file
-    res.download(file.file_path, file.original_name);
+    // Set headers for file download
+    res.setHeader('Content-Type', file.file_type);
+    res.setHeader('Content-Disposition', `attachment; filename="${file.original_name}"`);
+    
+    // Send file data
+    res.send(file.file_data);
   } catch (error) {
     console.error('Error downloading file:', error);
     res.status(500).json({ message: 'Server error during file download' });
@@ -933,20 +966,13 @@ app.delete('/api/files/:id', authenticateToken, async (req, res) => {
     
     const file = files[0];
     
-    // Delete file from disk
-    fs.unlink(file.file_path, async (err) => {
-      if (err) {
-        console.error('Error deleting file from disk:', err);
-      }
-      
-      // Delete from database regardless of disk operation
-      await pool.query('DELETE FROM medical_files WHERE id = ?', [fileId]);
-      
-      // Log activity
-      await logActivity(userId, 'FILE_DELETE', `User deleted a medical file: ${file.original_name}`);
-      
-      res.json({ message: 'File deleted successfully' });
-    });
+    // Delete from database
+    await pool.query('DELETE FROM medical_files WHERE id = ?', [fileId]);
+    
+    // Log activity
+    await logActivity(userId, 'FILE_DELETE', `User deleted a medical file: ${file.original_name}`);
+    
+    res.json({ message: 'File deleted successfully' });
   } catch (error) {
     console.error('Error deleting file:', error);
     res.status(500).json({ message: 'Server error during file deletion' });
