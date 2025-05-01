@@ -63,18 +63,18 @@ export default function Register() {
           </div>
 
           <AnimatePresence>
-            {registerError && (
+          {registerError && (
               <motion.div
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
                 className="mb-6 bg-error-50 border border-error-200 text-error-700 p-4 rounded-lg flex items-start"
               >
-                <AlertCircle className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" />
+              <AlertCircle className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" />
                 <div className="flex-1">
                   <p className="font-medium mb-1">Registration Failed</p>
-                  <p className="text-sm">{registerError}</p>
-                </div>
+              <p className="text-sm">{registerError}</p>
+            </div>
                 <button
                   onClick={() => setRegisterError(null)}
                   className="text-error-400 hover:text-error-500"
@@ -82,7 +82,7 @@ export default function Register() {
                   <X size={16} />
                 </button>
               </motion.div>
-            )}
+          )}
           </AnimatePresence>
 
           <form onSubmit={handleSubmit(onSubmit)}>

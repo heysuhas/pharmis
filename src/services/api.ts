@@ -7,6 +7,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 10000, // 10 second timeout
 });
 
 // Add request interceptor to add Authorization header
@@ -18,7 +19,39 @@ api.interceptors.request.use(
     }
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => {
+    console.error('API Request Error:', error);
+    return Promise.reject(error);
+  }
+);
+
+// Add response interceptor for error handling
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response) {
+      // The request was made and the server responded with a status code
+      // that falls out of the range of 2xx
+      console.error('API Response Error:', {
+        status: error.response.status,
+        data: error.response.data,
+        url: error.config?.url
+      });
+      
+      // Handle 401 Unauthorized
+      if (error.response.status === 401) {
+        localStorage.removeItem('token');
+        window.location.href = '/login';
+      }
+    } else if (error.request) {
+      // The request was made but no response was received
+      console.error('API No Response Error:', error.request);
+    } else {
+      // Something happened in setting up the request that triggered an Error
+      console.error('API Setup Error:', error.message);
+    }
+    return Promise.reject(error);
+  }
 );
 
 // Auth endpoints

@@ -124,6 +124,7 @@ export default function Profile() {
   const fetchProfileData = async () => {
     try {
       setIsLoading(true);
+      setError(null);
       const response = await axios.get('/api/profile');
       const { 
         name, 
@@ -173,7 +174,7 @@ export default function Profile() {
     if (user) {
       fetchProfileData();
     }
-  }, [user, register]);
+  }, [user]);
 
   const addAllergy = async () => {
     if (newAllergy.trim()) {
@@ -247,16 +248,16 @@ export default function Profile() {
     }
   };
 
-  const onSubmit = async (data: any) => {
+  const onSubmit = async (data: ProfileFormData) => {
     try {
-      setIsLoading(true);
+      setIsSubmitting(true);
       setError(null);
       
       // Format the data for submission
       const formattedData = {
         ...data,
-        allergies: allergies,
-        conditions: conditions,
+        allergies,
+        conditions,
         medications: medications.map(med => ({
           name: med.name,
           dosage: med.dosage || null
@@ -278,7 +279,7 @@ export default function Profile() {
       console.error('Error updating profile:', err);
       setError(err.response?.data?.message || 'Failed to update profile');
     } finally {
-      setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -302,6 +303,12 @@ export default function Profile() {
           Manage your personal health information
         </p>
       </div>
+      
+      {error && (
+        <div className="mb-6 p-4 bg-error-50 text-error-700 rounded-lg">
+          {error}
+        </div>
+      )}
       
       <form onSubmit={handleSubmit(onSubmit)}>
         {/* Profile picture */}

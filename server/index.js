@@ -99,7 +99,7 @@ pool.on('error', (err) => {
   } else {
     console.error('Database error:', err);
   }
-});
+  });
 
 // Middleware to verify JWT token
 const authenticateToken = (req, res, next) => {
@@ -169,16 +169,16 @@ app.post('/api/auth/register', async (req, res) => {
     const connection = await pool.getConnection();
     await connection.beginTransaction();
     try {
-      // Hash password
-      const hashedPassword = await bcrypt.hash(password, 10);
-      
-      // Insert user
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    // Insert user
       const [result] = await connection.query(
         'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
-        [name, email, hashedPassword]
-      );
-      const userId = result.insertId;
-      // Create initial profile
+      [name, email, hashedPassword]
+    );
+    const userId = result.insertId;
+    // Create initial profile
       await connection.query('INSERT INTO profiles (user_id) VALUES (?)', [userId]);
       // test
       // Create initial emergency contact
@@ -186,24 +186,24 @@ app.post('/api/auth/register', async (req, res) => {
         'INSERT INTO emergency_contacts (user_id, name, relationship, phone) VALUES (?, ?, ?, ?)',
         [userId, '', '', '']
       );
-      
-      // Generate token
-      const token = jwt.sign(
-        { id: userId, name, email },
-        process.env.JWT_SECRET || 'pharmis_secret_key',
-        { expiresIn: '30d' }
-      );
+    
+    // Generate token
+    const token = jwt.sign(
+      { id: userId, name, email },
+      process.env.JWT_SECRET || 'pharmis_secret_key',
+      { expiresIn: '30d' }
+    );
       
       // Commit transaction
       await connection.commit();
-      
-      // Log successful registration
-      await logActivity(userId, 'REGISTER_SUCCESS', 'User successfully created an account');
-      
-      res.status(201).json({
-        token,
-        user: { id: userId, name, email }
-      });
+    
+    // Log successful registration
+    await logActivity(userId, 'REGISTER_SUCCESS', 'User successfully created an account');
+    
+    res.status(201).json({
+      token,
+      user: { id: userId, name, email }
+    });
     } catch (error) {
       // Rollback transaction on error
       await connection.rollback();
@@ -373,7 +373,7 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
 
     // Log received payload for debugging
     console.log('Profile update payload:', req.body);
-
+    
     // Start a transaction
     const connection = await pool.getConnection();
     await connection.beginTransaction();
@@ -388,10 +388,10 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
       await connection.query(
         `UPDATE profiles SET 
           phone = ?,
-          date_of_birth = ?,
-          gender = ?,
-          height = ?,
-          weight = ?,
+          date_of_birth = ?, 
+          gender = ?, 
+          height = ?, 
+          weight = ?, 
           blood_type = ?
         WHERE user_id = ?`,
         [
@@ -407,21 +407,43 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
 
       // Update emergency contact
       if (emergencyContact) {
-        await connection.query(
-          `UPDATE emergency_contacts SET 
-            name = ?,
-            relationship = ?,
-            phone = ?
-          WHERE user_id = ?`,
-          [
-            emergencyContact.name || null,
-            emergencyContact.relationship || null,
-            emergencyContact.phone || null,
-            userId
-          ]
+        // Check if emergency contact exists
+        const [existingContacts] = await connection.query(
+          'SELECT id FROM emergency_contacts WHERE user_id = ?',
+          [userId]
         );
-      }
 
+        if (existingContacts.length > 0) {
+          // Update existing contact
+          await connection.query(
+            `UPDATE emergency_contacts SET 
+              name = ?,
+              relationship = ?,
+              phone = ? 
+            WHERE user_id = ?`,
+            [
+              emergencyContact.name || '',
+              emergencyContact.relationship || '',
+              emergencyContact.phone || '',
+              userId
+            ]
+          );
+        } else {
+          // Create new contact
+          await connection.query(
+            `INSERT INTO emergency_contacts 
+              (user_id, name, relationship, phone) 
+            VALUES (?, ?, ?, ?)`,
+            [
+              userId,
+              emergencyContact.name || '',
+              emergencyContact.relationship || '',
+              emergencyContact.phone || ''
+            ]
+          );
+        }
+      }
+      
       // Update allergies
       if (allergies) {
         await connection.query('DELETE FROM allergies WHERE user_id = ?', [userId]);
@@ -433,7 +455,7 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
           );
         }
       }
-
+      
       // Update conditions
       if (conditions) {
         await connection.query('DELETE FROM medical_conditions WHERE user_id = ?', [userId]);
@@ -445,7 +467,7 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
           );
         }
       }
-
+      
       // Update medications
       if (medications) {
         await connection.query('DELETE FROM medications WHERE user_id = ?', [userId]);
@@ -457,7 +479,7 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
           );
         }
       }
-
+      
       await connection.commit();
       res.json({ message: 'Profile updated successfully' });
     } catch (error) {
@@ -543,7 +565,7 @@ app.delete('/api/profile/conditions/:condition', authenticateToken, async (req, 
   } catch (error) {
     console.error('Error removing condition:', error);
     res.status(500).json({ message: 'Server error while removing condition' });
-  }
+        }
 });
 
 // Add medication
@@ -561,7 +583,7 @@ app.post('/api/profile/medications', authenticateToken, async (req, res) => {
     // Return updated list
     const [medicationsList] = await pool.query('SELECT name, dosage FROM medications WHERE user_id = ?', [userId]);
     res.status(201).json({ message: 'Medication added successfully', medications: medicationsList.map(m => ({ name: m.name, dosage: m.dosage })) });
-  } catch (error) {
+    } catch (error) {
     console.error('Error adding medication:', error);
     res.status(500).json({ message: 'Server error while adding medication' });
   }
@@ -988,12 +1010,12 @@ app.delete('/api/files/:id', authenticateToken, async (req, res) => {
     const file = files[0];
     
     // Delete from database
-    await pool.query('DELETE FROM medical_files WHERE id = ?', [fileId]);
-    
-    // Log activity
-    await logActivity(userId, 'FILE_DELETE', `User deleted a medical file: ${file.original_name}`);
-    
-    res.json({ message: 'File deleted successfully' });
+      await pool.query('DELETE FROM medical_files WHERE id = ?', [fileId]);
+      
+      // Log activity
+      await logActivity(userId, 'FILE_DELETE', `User deleted a medical file: ${file.original_name}`);
+      
+      res.json({ message: 'File deleted successfully' });
   } catch (error) {
     console.error('Error deleting file:', error);
     res.status(500).json({ message: 'Server error during file deletion' });
@@ -1094,7 +1116,7 @@ app.get('/api/insights', authenticateToken, async (req, res) => {
         const category = determineCategory(insight);
         const generated_date = new Date().toISOString().slice(0, 19).replace('T', ' ');
         return { 
-          id: Date.now() + index, 
+        id: Date.now() + index,
           title: title.trim().slice(0, 255), 
           content: content.slice(0, 10000),
           category,
@@ -1119,11 +1141,11 @@ app.get('/api/insights', authenticateToken, async (req, res) => {
 
     if (insightsChanged) {
       // Store new insights in database
-      for (const insight of insights) {
-        await pool.query(
-          'INSERT INTO health_insights (user_id, title, content, category, generated_date) VALUES (?, ?, ?, ?, ?)',
-          [userId, insight.title, insight.content, insight.category, insight.generated_date]
-        );
+    for (const insight of insights) {
+      await pool.query(
+        'INSERT INTO health_insights (user_id, title, content, category, generated_date) VALUES (?, ?, ?, ?, ?)',
+        [userId, insight.title, insight.content, insight.category, insight.generated_date]
+      );
       }
     }
 
@@ -1193,52 +1215,61 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     
-    // Get total daily logs
-    const [logsCount] = await pool.query(
-      'SELECT COUNT(*) as count FROM daily_logs WHERE user_id = ?',
+    // Get mood average from last 7 days
+    const [moodResults] = await pool.query(
+      `SELECT COALESCE(AVG(mood), 0) as moodAverage 
+       FROM daily_logs 
+       WHERE user_id = ? AND date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)`,
       [userId]
     );
     
-    // Get total medications
-    const [medsCount] = await pool.query(
-      'SELECT COUNT(*) as count FROM medications WHERE user_id = ?',
+    // Get symptoms count for current month
+    const [symptomsResults] = await pool.query(
+      `SELECT COUNT(*) as symptomsCount 
+       FROM symptoms s
+       JOIN daily_logs d ON s.daily_log_id = d.id
+       WHERE d.user_id = ? AND MONTH(d.date) = MONTH(CURDATE())`,
       [userId]
     );
     
-    // Get total conditions
-    const [conditionsCount] = await pool.query(
-      'SELECT COUNT(*) as count FROM medical_conditions WHERE user_id = ?',
+    // Get consecutive days streak
+    const [streakResults] = await pool.query(
+      `WITH RECURSIVE dates AS (
+         SELECT date, 1 as streak
+         FROM daily_logs
+         WHERE user_id = ? AND date = (
+           SELECT MAX(date) FROM daily_logs WHERE user_id = ?
+         )
+         UNION ALL
+         SELECT dl.date, d.streak + 1
+         FROM daily_logs dl
+         INNER JOIN dates d ON dl.date = DATE_SUB(d.date, INTERVAL 1 DAY)
+         WHERE dl.user_id = ?
+       )
+       SELECT COALESCE(MAX(streak), 0) as logsStreak FROM dates`,
+      [userId, userId, userId]
+    );
+    
+    // Get total medical files count
+    const [filesResults] = await pool.query(
+      `SELECT COUNT(*) as filesCount 
+       FROM medical_files 
+       WHERE user_id = ?`,
       [userId]
     );
     
-    // Get total allergies
-    const [allergiesCount] = await pool.query(
-      'SELECT COUNT(*) as count FROM allergies WHERE user_id = ?',
-      [userId]
-    );
+    // Convert all values to numbers and ensure they're not null
+    const stats = {
+      moodAverage: Number(moodResults[0].moodAverage) || 0,
+      symptomsCount: Number(symptomsResults[0].symptomsCount) || 0,
+      logsStreak: Number(streakResults[0].logsStreak) || 0,
+      filesCount: Number(filesResults[0].filesCount) || 0
+    };
     
-    // Get recent activity
-    const [recentActivity] = await pool.query(
-      `SELECT activity_type, description, created_at 
-       FROM activity_logs 
-       WHERE user_id = ? 
-       ORDER BY created_at DESC 
-       LIMIT 5`,
-      [userId]
-    );
-    
-    res.json({
-      stats: {
-        totalLogs: logsCount[0].count,
-        totalMedications: medsCount[0].count,
-        totalConditions: conditionsCount[0].count,
-        totalAllergies: allergiesCount[0].count
-      },
-      recentActivity
-    });
+    res.json(stats);
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);
-    res.status(500).json({ message: 'Server error while fetching dashboard stats' });
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
