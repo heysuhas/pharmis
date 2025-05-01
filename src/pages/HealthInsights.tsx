@@ -29,6 +29,7 @@ import {
   BarChart,
   Bar
 } from 'recharts';
+import { Link } from 'react-router-dom';
 
 interface Insight {
   id: number;
@@ -57,6 +58,8 @@ export default function HealthInsights() {
   const [timeRange, setTimeRange] = useState('30'); // days
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastFetchTime, setLastFetchTime] = useState<number>(0);
+  const [hasNewData, setHasNewData] = useState(false);
   
   const categories = [
     { name: 'Sleep', icon: BedDouble, color: 'bg-indigo-100 text-indigo-600' },
@@ -67,6 +70,17 @@ export default function HealthInsights() {
     { name: 'Medication', icon: Pill, color: 'bg-purple-100 text-purple-600' },
   ];
 
+  // Function to check if there's new health data
+  const checkForNewData = async () => {
+    try {
+      const response = await logsAPI.getLatestLogTimestamp();
+      const latestLogTime = new Date(response.data.timestamp).getTime();
+      setHasNewData(latestLogTime > lastFetchTime);
+    } catch (error) {
+      console.error('Error checking for new data:', error);
+    }
+  };
+
   const fetchData = async () => {
     try {
       setIsRefreshing(true);
@@ -74,7 +88,12 @@ export default function HealthInsights() {
       // Fetch insights based on selected category
       const params = selectedCategory ? { category: selectedCategory, timeRange } : { timeRange };
       const insightsResponse = await insightsAPI.getInsights(params);
-      setInsights(insightsResponse.data);
+      
+      if (Array.isArray(insightsResponse.data)) {
+        setInsights(insightsResponse.data);
+      } else {
+        setInsights([]);
+      }
       
       // Fetch mood data
       const moodResponse = await dashboardAPI.getMoodChart({ days: parseInt(timeRange) });
@@ -83,6 +102,9 @@ export default function HealthInsights() {
       // Fetch symptoms data
       const symptomsResponse = await dashboardAPI.getTopSymptoms();
       setSymptomsData(symptomsResponse.data);
+      
+      setLastFetchTime(Date.now());
+      setHasNewData(false);
     } catch (error) {
       console.error('Error fetching health insights data:', error);
     } finally {
@@ -90,6 +112,12 @@ export default function HealthInsights() {
       setIsRefreshing(false);
     }
   };
+
+  // Check for new data every 5 minutes
+  useEffect(() => {
+    const interval = setInterval(checkForNewData, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [lastFetchTime]);
   
   useEffect(() => {
     fetchData();
@@ -156,12 +184,14 @@ export default function HealthInsights() {
           </select>
           
           <button 
-            className={`btn btn-outline flex items-center ${isRefreshing ? 'opacity-50 cursor-not-allowed' : ''}`}
+            className={`btn btn-outline flex items-center ${isRefreshing ? 'opacity-50 cursor-not-allowed' : ''} ${
+              hasNewData ? 'bg-primary-50 border-primary-200' : ''
+            }`}
             onClick={fetchData}
             disabled={isRefreshing}
           >
             <RefreshCw size={16} className={`mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
-            Refresh
+            {hasNewData ? 'New Data Available' : 'Refresh'}
           </button>
         </div>
       </div>
@@ -336,7 +366,7 @@ export default function HealthInsights() {
                   </div>
                 </div>
                 
-                <p className="text-sm text-neutral-700">{insight.content}</p>
+                <p className="text-sm text-neutral-700 whitespace-pre-line">{insight.content}</p>
               </motion.div>
             );
           })}
@@ -346,12 +376,14 @@ export default function HealthInsights() {
           <Brain size={48} className="mx-auto mb-4 text-neutral-300" />
           <h3 className="text-lg font-medium mb-2">No insights available</h3>
           <p className="text-neutral-500 mb-6 max-w-md mx-auto">
-            Keep logging your daily health data to receive personalized insights based on your patterns.
+            {searchQuery 
+              ? "No insights match your search criteria. Try adjusting your filters."
+              : "Keep logging your daily health data to receive personalized insights based on your patterns."}
           </p>
-          <a href="/daily-log" className="btn btn-primary inline-flex items-center">
+          <Link to="/daily-log" className="btn btn-primary inline-flex items-center">
             <Calendar size={18} className="mr-2" />
             Add a daily log
-          </a>
+          </Link>
         </div>
       )}
     </motion.div>

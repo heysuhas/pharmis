@@ -766,6 +766,27 @@ app.get('/api/logs/:date', authenticateToken, async (req, res) => {
   }
 });
 
+// Get latest log timestamp
+app.get('/api/logs/latest-timestamp', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const [result] = await pool.query(
+      `SELECT MAX(created_at) as timestamp 
+       FROM (
+         SELECT MAX(date) as created_at FROM daily_logs WHERE user_id = ?
+         UNION ALL
+         SELECT MAX(created_at) FROM activity_logs WHERE user_id = ?
+       ) as logs`,
+      [userId, userId]
+    );
+    
+    res.json({ timestamp: result[0]?.timestamp || null });
+  } catch (error) {
+    console.error('Error fetching latest log timestamp:', error);
+    res.status(500).json({ message: 'Error fetching latest log timestamp' });
+  }
+});
+
 // =========== LIFESTYLE ROUTES ===========
 
 // Get lifestyle logs
@@ -1030,13 +1051,19 @@ app.get('/api/insights', authenticateToken, async (req, res) => {
         model: "llama3-70b-8192",
         messages: [{
           role: "system",
-          content: "You are a health analysis AI that generates insights from health data. Focus on identifying patterns, correlations, and actionable recommendations."
+          content: `You are a professional healthcare insights analyzer that provides concise, actionable insights from health data. Follow these rules:
+          1. Only generate insights when there is sufficient data to make meaningful observations
+          2. Keep insights brief and focused on actionable patterns
+          3. Avoid speculative correlations without strong evidence
+          4. Format each insight as "Title: Brief explanation"
+          5. Do not use any markdown or special formatting characters
+          6. Only include insights that are clearly supported by the data`
         }, {
           role: "user",
-          content: `Analyze this health data and provide 3-5 key insights about patterns, correlations, and recommendations. Data: ${JSON.stringify(healthData)}`
+          content: `Analyze this health data and provide 2-3 key insights about significant patterns and actionable recommendations. Only provide insights if there is sufficient data to support them. Data: ${JSON.stringify(healthData)}`
         }],
-        temperature: 0.7,
-        max_tokens: 1000
+        temperature: 0.5,
+        max_tokens: 500
       })
     });
 
@@ -1045,27 +1072,59 @@ app.get('/api/insights', authenticateToken, async (req, res) => {
       console.error('Groq API error or unexpected response:', groqResult);
       return res.status(500).json({ message: 'AI service error: Unable to generate insights at this time.' });
     }
-    const aiAnalysis = groqResult.choices[0].message.content;
+
+    // Clean and validate AI response
+    let aiAnalysis = groqResult.choices[0].message.content.trim();
+    if (!aiAnalysis || aiAnalysis.toLowerCase().includes('not enough data') || aiAnalysis.toLowerCase().includes('insufficient data')) {
+      return res.json([]);
+    }
 
     // Parse AI response and store insights
     const insights = aiAnalysis.split('\n')
       .filter(line => line.trim().length > 0)
       .map((insight, index) => {
-        const title = insight.split(':')[0].trim().slice(0, 255);
-        const content = (insight.split(':')[1]?.trim() || insight).slice(0, 10000); // truncate if needed
+        const [title, ...contentParts] = insight.split(':');
+        const content = contentParts.join(':').trim();
+        // Skip insights if they don't have both title and content
+        if (!title || !content) return null;
+        // Skip insights about mood correlation unless there's strong evidence
+        if (title.toLowerCase().includes('mood') && content.toLowerCase().includes('correlation') && !content.match(/\d+%|\d+\s*points?/)) {
+          return null;
+        }
         const category = determineCategory(insight);
-        // Format date for MySQL DATETIME (YYYY-MM-DD HH:MM:SS)
         const generated_date = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        return { id: Date.now() + index, title, content, category, generated_date };
+        return { 
+          id: Date.now() + index, 
+          title: title.trim().slice(0, 255), 
+          content: content.slice(0, 10000),
+          category,
+          generated_date 
+        };
       })
-      .filter(insight => !insight.title.toLowerCase().includes('no health data provided'));
+      .filter(Boolean); // Remove null entries
 
-    // Store insights in database
-    for (const insight of insights) {
-      await pool.query(
-        'INSERT INTO health_insights (user_id, title, content, category, generated_date) VALUES (?, ?, ?, ?, ?)',
-        [userId, insight.title, insight.content, insight.category, insight.generated_date]
-      );
+    if (insights.length === 0) {
+      return res.json([]);
+    }
+
+    // Check if insights have changed since last generation
+    const [existingInsights] = await pool.query(
+      'SELECT content FROM health_insights WHERE user_id = ? ORDER BY generated_date DESC LIMIT ?',
+      [userId, insights.length]
+    );
+
+    const insightsChanged = !existingInsights.every((existing, index) => 
+      existing.content === insights[index].content
+    );
+
+    if (insightsChanged) {
+      // Store new insights in database
+      for (const insight of insights) {
+        await pool.query(
+          'INSERT INTO health_insights (user_id, title, content, category, generated_date) VALUES (?, ?, ?, ?, ?)',
+          [userId, insight.title, insight.content, insight.category, insight.generated_date]
+        );
+      }
     }
 
     res.json(insights);

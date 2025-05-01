@@ -52,6 +52,8 @@ export const logsAPI = {
   
   createLog: (logData: any) => 
     api.post('/logs', logData),
+  
+  getLatestLogTimestamp: () => api.get('/logs/latest-timestamp'),
 };
 
 // Lifestyle tracking endpoints
@@ -84,7 +86,7 @@ export const filesAPI = {
 
 // Health insights endpoints
 export const insightsAPI = {
-  getInsights: (params?: { category?: string }) => 
+  getInsights: (params?: { category?: string, timeRange?: string }) => 
     api.get('/insights', { params }),
 };
 
