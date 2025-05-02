@@ -91,11 +91,25 @@ export const logsAPI = {
 
 // Lifestyle tracking endpoints
 export const lifestyleAPI = {
-  getLogs: (params?: { type?: string; startDate?: string; endDate?: string }) => 
-    api.get('/lifestyle', { params }),
+  getLogs: async (params?: { type?: string; startDate?: string; endDate?: string }) => {
+    try {
+      const response = await api.get('/lifestyle', { params });
+      return response;
+    } catch (error) {
+      console.error('Error fetching lifestyle logs:', error);
+      throw error;
+    }
+  },
   
-  createLog: (logData: any) => 
-    api.post('/lifestyle', logData),
+  createLog: async (logData: any) => {
+    try {
+      const response = await api.post('/lifestyle', logData);
+      return response;
+    } catch (error) {
+      console.error('Error creating lifestyle log:', error);
+      throw error;
+    }
+  },
 };
 
 // Medical files endpoints

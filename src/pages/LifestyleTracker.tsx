@@ -91,6 +91,8 @@ interface ChartData {
 export default function LifestyleTracker() {
   const [activeTab, setActiveTab] = useState<'EXERCISE' | 'SMOKING' | 'DRINKING' | 'HISTORY' | 'STATS'>('EXERCISE');
   const [logs, setLogs] = useState<LifestyleLog[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -141,13 +143,25 @@ export default function LifestyleTracker() {
   useEffect(() => {
     const fetchLogs = async () => {
       try {
+        setIsLoading(true);
+        setError(null);
         const response = await lifestyleAPI.getLogs({
           type: selectedLogType || undefined,
           startDate: getStartDate(parseInt(dateRange)),
         });
-        setLogs(response.data);
+        setLogs(response.data || []);
+        console.log('[DEBUG] Fetched logs:', response.data);
+        if (response.data) {
+          response.data.forEach((log: any) => {
+            console.log(`[DEBUG] Log: date=${log.date}, type=${log.activity_type}`);
+          });
+        }
       } catch (error) {
         console.error('Error fetching lifestyle logs:', error);
+        setError('Failed to load lifestyle data. Please try again later.');
+        setLogs([]);
+      } finally {
+        setIsLoading(false);
       }
     };
     
@@ -178,17 +192,22 @@ export default function LifestyleTracker() {
   const submitLifestyleLog = async (data: any) => {
     try {
       setIsSubmitting(true);
+      setError(null);
       
       await lifestyleAPI.createLog(data);
       
       // Update the local logs state
-      const updatedLogs = await lifestyleAPI.getLogs();
-      setLogs(updatedLogs.data);
+      const response = await lifestyleAPI.getLogs({
+        type: selectedLogType || undefined,
+        startDate: getStartDate(parseInt(dateRange)),
+      });
+      setLogs(response.data || []);
       
       setSubmitSuccess(true);
       setTimeout(() => setSubmitSuccess(false), 3000);
     } catch (error) {
       console.error('Failed to submit lifestyle log', error);
+      setError('Failed to save activity. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -205,31 +224,55 @@ export default function LifestyleTracker() {
 
   // Prepare chart data
   const prepareWeeklyChartData = (): ChartData[] => {
+    // Get last 7 days as YYYY-MM-DD in local time
     const last7Days = Array.from({ length: 7 }, (_, i) => {
-      const date = new Date();
-      date.setDate(date.getDate() - (6 - i));
-      return date.toISOString().split('T')[0];
+      const d = new Date();
+      d.setHours(0, 0, 0, 0); // zero out time
+      d.setDate(d.getDate() - (6 - i));
+      // Format as YYYY-MM-DD in local time
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
     });
-    
-    const data = last7Days.map(date => {
-      const dayLogs = logs.filter(log => log.date === date);
-      
+    console.log('[DEBUG] last7Days:', last7Days);
+
+    // Debug: print normalized log dates
+    logs.forEach(log => {
+      const logDate = new Date(log.date);
+      const yyyy = logDate.getFullYear();
+      const mm = String(logDate.getMonth() + 1).padStart(2, '0');
+      const dd = String(logDate.getDate()).padStart(2, '0');
+      const normalizedLogDate = `${yyyy}-${mm}-${dd}`;
+      console.log(`[DEBUG] log.date: ${log.date}, normalized: ${normalizedLogDate}`);
+    });
+
+    const chartData = last7Days.map(dateStr => {
+      const dayLogs = logs.filter(log => {
+        const logDate = new Date(log.date);
+        const yyyy = logDate.getFullYear();
+        const mm = String(logDate.getMonth() + 1).padStart(2, '0');
+        const dd = String(logDate.getDate()).padStart(2, '0');
+        const normalizedLogDate = `${yyyy}-${mm}-${dd}`;
+        return normalizedLogDate === dateStr;
+      });
       const exerciseCount = dayLogs.filter(log => log.activity_type === 'EXERCISE').length;
       const smokingCount = dayLogs.filter(log => log.activity_type === 'SMOKING')
         .reduce((sum, log) => sum + (log.quantity || 0), 0);
       const drinkingCount = dayLogs.filter(log => log.activity_type === 'DRINKING')
         .reduce((sum, log) => sum + (log.quantity || 0), 0);
-      
+      // Use local weekday name
+      const weekday = new Date(dateStr).toLocaleDateString('en-US', { weekday: 'short' });
       return {
-        name: new Date(date).toLocaleDateString('en-US', { weekday: 'short' }),
-        date,
-        Exercise: exerciseCount,
-        Smoking: smokingCount,
-        Drinking: drinkingCount,
+        name: weekday,
+        date: dateStr,
+        Exercise: exerciseCount || 0,
+        Smoking: smokingCount || 0,
+        Drinking: drinkingCount || 0,
       };
     });
-    
-    return data;
+    console.log('[DEBUG] chartData:', chartData);
+    return chartData;
   };
   
   const prepareExerciseTypesData = () => {
@@ -247,6 +290,10 @@ export default function LifestyleTracker() {
   const exerciseTypesData = prepareExerciseTypesData();
 
   const COLORS = ['#4F46E5', '#0D9488', '#F59E0B', '#DC2626', '#8B5CF6', '#EC4899'];
+
+  useEffect(() => {
+    console.log('[DEBUG] chartData before render:', chartData);
+  }, [chartData]);
 
   return (
     <motion.div
@@ -812,176 +859,205 @@ export default function LifestyleTracker() {
       
       {activeTab === 'STATS' && (
         <div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            {/* Weekly activity chart */}
-            <div className="card">
-              <h2 className="text-lg font-semibold mb-4">Weekly Activity Overview</h2>
-              
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={chartData}
-                    margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="name" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="Exercise" fill="#4F46E5" />
-                    <Bar dataKey="Smoking" fill="#DC2626" />
-                    <Bar dataKey="Drinking" fill="#F59E0B" />
-                  </BarChart>
-                </ResponsiveContainer>
+          {error && (
+            <div className="mb-6 p-4 bg-error-50 border border-error-200 rounded-lg">
+              <p className="text-error-600">{error}</p>
+            </div>
+          )}
+          
+          {isLoading ? (
+            <div className="flex flex-col items-center justify-center h-64">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+              <p className="mt-4 text-neutral-500">Loading statistics...</p>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                {/* Weekly activity chart */}
+                <div className="card">
+                  <h2 className="text-lg font-semibold mb-4">Weekly Activity Overview</h2>
+                  
+                  {logs.length > 0 ? (
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={chartData}
+                          margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          <Bar dataKey="Exercise" fill="#4F46E5" />
+                          <Bar dataKey="Smoking" fill="#DC2626" />
+                          <Bar dataKey="Drinking" fill="#F59E0B" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-64">
+                      <Activity size={36} className="text-neutral-300 mb-2" />
+                      <p className="text-neutral-500">No activity data available</p>
+                    </div>
+                  )}
+                  
+                  <p className="text-sm text-neutral-500 mt-2">
+                    Overview of your activity patterns over the past week.
+                  </p>
+                </div>
+                
+                {/* Exercise types distribution */}
+                <div className="card">
+                  <h2 className="text-lg font-semibold mb-4">Exercise Types Distribution</h2>
+                  
+                  {exerciseTypesData.length > 0 ? (
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={exerciseTypesData}
+                            cx="50%"
+                            cy="50%"
+                            labelLine={false}
+                            label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                            outerRadius={80}
+                            fill="#8884d8"
+                            dataKey="value"
+                          >
+                            {exerciseTypesData.map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-64">
+                      <Dumbbell size={36} className="text-neutral-300 mb-2" />
+                      <p className="text-neutral-500">No exercise data available</p>
+                    </div>
+                  )}
+                  
+                  <p className="text-sm text-neutral-500 mt-2">
+                    Distribution of different types of exercises you've performed.
+                  </p>
+                </div>
               </div>
               
-              <p className="text-sm text-neutral-500 mt-2">
-                Overview of your activity patterns over the past week.
-              </p>
-            </div>
-            
-            {/* Exercise types distribution */}
-            <div className="card">
-              <h2 className="text-lg font-semibold mb-4">Exercise Types Distribution</h2>
-              
-              {exerciseTypesData.length > 0 ? (
-                <div className="h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={exerciseTypesData}
-                        cx="50%"
-                        cy="50%"
-                        labelLine={false}
-                        label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
-                        outerRadius={80}
-                        fill="#8884d8"
-                        dataKey="value"
+              {/* Activity trends */}
+              <div className="card mb-6">
+                <h2 className="text-lg font-semibold mb-4">Activity Trends Over Time</h2>
+                
+                {logs.length > 0 ? (
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart
+                        data={chartData}
+                        margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
                       >
-                        {exerciseTypesData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center h-64">
-                  <Dumbbell size={36} className="text-neutral-300 mb-2" />
-                  <p className="text-neutral-500">No exercise data available</p>
-                </div>
-              )}
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" />
+                        <YAxis />
+                        <Tooltip />
+                        <Legend />
+                        <Line
+                          type="monotone"
+                          dataKey="Exercise"
+                          stroke="#4F46E5"
+                          strokeWidth={2}
+                          dot={{ r: 4 }}
+                          activeDot={{ r: 6 }}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="Smoking"
+                          stroke="#DC2626"
+                          strokeWidth={2}
+                          dot={{ r: 4 }}
+                          activeDot={{ r: 6 }}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="Drinking"
+                          stroke="#F59E0B"
+                          strokeWidth={2}
+                          dot={{ r: 4 }}
+                          activeDot={{ r: 6 }}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-72">
+                    <BarChart2 size={36} className="text-neutral-300 mb-2" />
+                    <p className="text-neutral-500">No activity data available</p>
+                  </div>
+                )}
+                
+                <p className="text-sm text-neutral-500 mt-2">
+                  Visualize how your lifestyle habits have changed over time.
+                </p>
+              </div>
               
-              <p className="text-sm text-neutral-500 mt-2">
-                Distribution of different types of exercises you've performed.
-              </p>
-            </div>
-          </div>
-          
-          {/* Activity trends */}
-          <div className="card mb-6">
-            <h2 className="text-lg font-semibold mb-4">Activity Trends Over Time</h2>
-            
-            <div className="h-72">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart
-                  data={chartData}
-                  margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="Exercise"
-                    stroke="#4F46E5"
-                    strokeWidth={2}
-                    dot={{ r: 4 }}
-                    activeDot={{ r: 6 }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="Smoking"
-                    stroke="#DC2626"
-                    strokeWidth={2}
-                    dot={{ r: 4 }}
-                    activeDot={{ r: 6 }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="Drinking"
-                    stroke="#F59E0B"
-                    strokeWidth={2}
-                    dot={{ r: 4 }}
-                    activeDot={{ r: 6 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-            
-            <p className="text-sm text-neutral-500 mt-2">
-              Visualize how your lifestyle habits have changed over time.
-            </p>
-          </div>
-          
-          {/* Stats cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="card bg-primary-50 border border-primary-100">
-              <div className="flex items-center">
-                <div className="p-3 bg-primary-100 rounded-lg">
-                  <Dumbbell className="h-6 w-6 text-primary-600" />
+              {/* Stats cards */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="card bg-primary-50 border border-primary-100">
+                  <div className="flex items-center">
+                    <div className="p-3 bg-primary-100 rounded-lg">
+                      <Dumbbell className="h-6 w-6 text-primary-600" />
+                    </div>
+                    <div className="ml-4">
+                      <h3 className="text-sm font-medium text-neutral-500">Exercise Activity</h3>
+                      <p className="text-2xl font-semibold text-primary-700">
+                        {logs.filter(log => log.activity_type === 'EXERCISE').length || 0}
+                      </p>
+                      <p className="text-xs text-primary-600 mt-1">
+                        Total exercise sessions logged
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <div className="ml-4">
-                  <h3 className="text-sm font-medium text-neutral-500">Exercise Activity</h3>
-                  <p className="text-2xl font-semibold text-primary-700">
-                    {logs.filter(log => log.activity_type === 'EXERCISE').length}
-                  </p>
-                  <p className="text-xs text-primary-600 mt-1">
-                    Total exercise sessions logged
-                  </p>
+                
+                <div className="card bg-error-50 border border-error-100">
+                  <div className="flex items-center">
+                    <div className="p-3 bg-error-100 rounded-lg">
+                      <Cigarette className="h-6 w-6 text-error-600" />
+                    </div>
+                    <div className="ml-4">
+                      <h3 className="text-sm font-medium text-neutral-500">Smoking Activity</h3>
+                      <p className="text-2xl font-semibold text-error-700">
+                        {logs.filter(log => log.activity_type === 'SMOKING')
+                          .reduce((sum, log) => sum + (log.quantity || 0), 0) || 0}
+                      </p>
+                      <p className="text-xs text-error-600 mt-1">
+                        Total smoking units recorded
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="card bg-accent-50 border border-accent-100">
+                  <div className="flex items-center">
+                    <div className="p-3 bg-accent-100 rounded-lg">
+                      <Beer className="h-6 w-6 text-accent-600" />
+                    </div>
+                    <div className="ml-4">
+                      <h3 className="text-sm font-medium text-neutral-500">Drinking Activity</h3>
+                      <p className="text-2xl font-semibold text-accent-700">
+                        {logs.filter(log => log.activity_type === 'DRINKING')
+                          .reduce((sum, log) => sum + (log.quantity || 0), 0) || 0}
+                      </p>
+                      <p className="text-xs text-accent-600 mt-1">
+                        Total drinks consumed
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-            
-            <div className="card bg-error-50 border border-error-100">
-              <div className="flex items-center">
-                <div className="p-3 bg-error-100 rounded-lg">
-                  <Cigarette className="h-6 w-6 text-error-600" />
-                </div>
-                <div className="ml-4">
-                  <h3 className="text-sm font-medium text-neutral-500">Smoking Activity</h3>
-                  <p className="text-2xl font-semibold text-error-700">
-                    {logs.filter(log => log.activity_type === 'SMOKING')
-                      .reduce((sum, log) => sum + (log.quantity || 0), 0)}
-                  </p>
-                  <p className="text-xs text-error-600 mt-1">
-                    Total smoking units recorded
-                  </p>
-                </div>
-              </div>
-            </div>
-            
-            <div className="card bg-accent-50 border border-accent-100">
-              <div className="flex items-center">
-                <div className="p-3 bg-accent-100 rounded-lg">
-                  <Beer className="h-6 w-6 text-accent-600" />
-                </div>
-                <div className="ml-4">
-                  <h3 className="text-sm font-medium text-neutral-500">Drinking Activity</h3>
-                  <p className="text-2xl font-semibold text-accent-700">
-                    {logs.filter(log => log.activity_type === 'DRINKING')
-                      .reduce((sum, log) => sum + (log.quantity || 0), 0)}
-                  </p>
-                  <p className="text-xs text-accent-600 mt-1">
-                    Total drinks consumed
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
+            </>
+          )}
         </div>
       )}
     </motion.div>
