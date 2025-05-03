@@ -135,6 +135,18 @@ export const filesAPI = {
 export const insightsAPI = {
   getInsights: (params?: { category?: string, timeRange?: string }) => 
     api.get('/insights', { params }),
+    
+  getLatestInsight: () =>
+    api.get('/insights/latest'),
+    
+  generateInsight: () =>
+    api.post('/insights/generate'),
+    
+  getInsightsHistory: (days = 7) =>
+    api.get(`/insights/history?days=${days}`).catch(error => {
+      console.error('Error fetching insights history:', error);
+      throw error;
+    }),
 };
 
 // Dashboard endpoints

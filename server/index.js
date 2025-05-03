@@ -10,6 +10,7 @@ import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import crypto from 'crypto';
 
 // Configure dotenv
 dotenv.config();
@@ -52,7 +53,8 @@ const dbConfig = {
   database: process.env.DB_NAME || 'pharmis_db',
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  queueLimit: 0,
+  dateStrings: true 
 };
 
 const pool = mysql.createPool(dbConfig);
@@ -663,21 +665,24 @@ app.get('/api/logs', authenticateToken, async (req, res) => {
 app.post('/api/logs', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { date, mood, notes, symptoms, medications } = req.body;
-    
+    let { date, mood, notes, symptoms, medications } = req.body;
+    const rawDate = date;
+    // Only accept YYYY-MM-DD format
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ message: 'Date must be in YYYY-MM-DD format' });
+    }
+    // Debug log
+    console.log(`[DAILY_LOG][CREATE] userId=${userId}, rawDate=${rawDate}, storedDate=${date}`);
     // Start a transaction
     const connection = await pool.getConnection();
     await connection.beginTransaction();
-    
     try {
       // Check if a log already exists for this date
       const [existingLogs] = await connection.query(
         'SELECT id FROM daily_logs WHERE user_id = ? AND date = ?',
         [userId, date]
       );
-      
       let logId;
-      
       if (existingLogs.length > 0) {
         // Update existing log
         logId = existingLogs[0].id;
@@ -685,7 +690,6 @@ app.post('/api/logs', authenticateToken, async (req, res) => {
           'UPDATE daily_logs SET mood = ?, notes = ? WHERE id = ?',
           [mood, notes, logId]
         );
-        
         // Delete existing symptoms and medications for this log
         await connection.query('DELETE FROM symptoms WHERE daily_log_id = ?', [logId]);
         await connection.query('DELETE FROM medication_logs WHERE daily_log_id = ?', [logId]);
@@ -695,10 +699,8 @@ app.post('/api/logs', authenticateToken, async (req, res) => {
           'INSERT INTO daily_logs (user_id, date, mood, notes) VALUES (?, ?, ?, ?)',
           [userId, date, mood, notes]
         );
-        
         logId = result.insertId;
       }
-      
       // Add symptoms
       if (symptoms && symptoms.length > 0) {
         const symptomValues = symptoms.map(symptom => [
@@ -707,13 +709,11 @@ app.post('/api/logs', authenticateToken, async (req, res) => {
           symptom.severity,
           symptom.notes || null
         ]);
-        
         await connection.query(
           'INSERT INTO symptoms (daily_log_id, name, severity, notes) VALUES ?',
           [symptomValues]
         );
       }
-      
       // Add medications
       if (medications && medications.length > 0) {
         const medicationValues = medications.map(med => [
@@ -722,18 +722,14 @@ app.post('/api/logs', authenticateToken, async (req, res) => {
           med.dosage || null,
           med.taken || false
         ]);
-        
         await connection.query(
           'INSERT INTO medication_logs (daily_log_id, name, dosage, taken) VALUES ?',
           [medicationValues]
         );
       }
-      
       await connection.commit();
-      
       // Log activity
       await logActivity(userId, 'DAILY_LOG', 'User added/updated a daily health log');
-      
       res.status(201).json({ id: logId, message: 'Daily log created successfully' });
     } catch (error) {
       await connection.rollback();
@@ -747,12 +743,36 @@ app.post('/api/logs', authenticateToken, async (req, res) => {
   }
 });
 
+// Get latest log timestamp
+app.get('/api/logs/latest-timestamp', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const [result] = await pool.query(
+      `SELECT MAX(created_at) as timestamp 
+       FROM (
+         SELECT MAX(date) as created_at FROM daily_logs WHERE user_id = ?
+         UNION ALL
+         SELECT MAX(created_at) FROM activity_logs WHERE user_id = ?
+       ) as logs`,
+      [userId, userId]
+    );
+    
+    res.json({ timestamp: result[0]?.timestamp || null });
+  } catch (error) {
+    console.error('Error fetching latest log timestamp:', error);
+    res.status(500).json({ message: 'Error fetching latest log timestamp' });
+  }
+});
+
 // Get a specific daily log
 app.get('/api/logs/:date', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const { date } = req.params;
-    
+    // Guard: If someone tries to use 'latest-timestamp' as a date, return 400
+    if (date === 'latest-timestamp') {
+      return res.status(400).json({ message: 'Invalid date parameter' });
+    }
     // Get the log
     const [logs] = await pool.query(
       'SELECT * FROM daily_logs WHERE user_id = ? AND date = ?',
@@ -785,27 +805,6 @@ app.get('/api/logs/:date', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error fetching daily log:', error);
     res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// Get latest log timestamp
-app.get('/api/logs/latest-timestamp', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const [result] = await pool.query(
-      `SELECT MAX(created_at) as timestamp 
-       FROM (
-         SELECT MAX(date) as created_at FROM daily_logs WHERE user_id = ?
-         UNION ALL
-         SELECT MAX(created_at) FROM activity_logs WHERE user_id = ?
-       ) as logs`,
-      [userId, userId]
-    );
-    
-    res.json({ timestamp: result[0]?.timestamp || null });
-  } catch (error) {
-    console.error('Error fetching latest log timestamp:', error);
-    res.status(500).json({ message: 'Error fetching latest log timestamp' });
   }
 });
 
@@ -1073,18 +1072,19 @@ app.get('/api/insights', authenticateToken, async (req, res) => {
         model: "llama3-70b-8192",
         messages: [{
           role: "system",
-          content: `You are a professional healthcare insights analyzer that provides concise, actionable insights from health data. Follow these rules:
-          1. Only generate insights when there is sufficient data to make meaningful observations
-          2. Keep insights brief and focused on actionable patterns
-          3. Avoid speculative correlations without strong evidence
-          4. Format each insight as "Title: Brief explanation"
-          5. Do not use any markdown or special formatting characters
-          6. Only include insights that are clearly supported by the data`
+          content: `You are a warm, empathetic health coach. For the user's health and lifestyle logs, provide few actionable, practical, and supportive insights around 3-4 lines.
+- Reference the user's actual symptoms, notes, mood, medications, and lifestyle logs.
+- If the user logs symptoms like depression, anxiety, or pain, suggest self-care actions (rest, hydration, exercise, social support, etc.) and possible over-the-counter remedies, but always add: "Consult your doctor before starting any new medication or supplement."
+- If the user writes notes, reference them directly and offer encouragement or practical next steps.
+- If the user is taking a medication, mention it by name and remind them to follow their doctor's advice.
+- Use a warm, encouraging, and practical tone.
+- Never diagnose or prescribe new medications, but you may mention common self-care or OTC options with a disclaimer.
+- Format: Title: Content`
         }, {
           role: "user",
           content: `Analyze this health data and provide 2-3 key insights about significant patterns and actionable recommendations. Only provide insights if there is sufficient data to support them. Data: ${JSON.stringify(healthData)}`
         }],
-        temperature: 0.5,
+        temperature: 0.8,
         max_tokens: 500
       })
     });
@@ -1114,7 +1114,7 @@ app.get('/api/insights', authenticateToken, async (req, res) => {
           return null;
         }
         const category = determineCategory(insight);
-        const generated_date = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        const generated_date = toMySQLDate(new Date());
         return { 
         id: Date.now() + index,
           title: title.trim().slice(0, 255), 
@@ -1270,6 +1270,423 @@ app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get the latest AI insight for the user (now day-wise)
+app.get('/api/insights/latest', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    // Get today's date in YYYY-MM-DD
+    const today = new Date().toISOString().slice(0, 10);
+    const [insights] = await pool.query(
+      'SELECT * FROM health_insights WHERE user_id = ? AND DATE(generated_date) = ? ORDER BY generated_date DESC LIMIT 1',
+      [userId, today]
+    );
+    if (insights.length === 0) {
+      return res.json(null);
+    }
+    res.json(insights[0]);
+  } catch (error) {
+    console.error('Error fetching latest AI insight:', error);
+    res.status(500).json({ message: 'Error fetching latest AI insight' });
+  }
+});
+
+// PATCH: Robust MySQL DATETIME normalization for all generated_date usages
+function toMySQLDate(date) {
+  if (!date) return null;
+  // If already in 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS' format
+  if (typeof date === 'string') {
+    const match = date.match(/^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}:\d{2}))?/);
+    if (match) {
+      return match[1] + ' 00:00:00';
+    }
+  }
+  // If Date object
+  if (date instanceof Date) {
+    return date.toISOString().slice(0, 10) + ' 00:00:00';
+  }
+  // If timestamp or other, try to parse
+  try {
+    const d = new Date(date);
+    if (!isNaN(d.getTime())) {
+      return d.toISOString().slice(0, 10) + ' 00:00:00';
+    }
+  } catch {}
+  return null;
+}
+
+// Helper to get existing insight for user/date (date is always YYYY-MM-DD string)
+async function getExistingInsight(userId, date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    console.error('[getExistingInsight] BAD DATE FORMAT:', date);
+    throw new Error('Date must be in YYYY-MM-DD format');
+  }
+  const [rows] = await pool.query(
+    'SELECT * FROM health_insights WHERE user_id = ? AND DATE(generated_date) = ? LIMIT 1',
+    [userId, date]
+  );
+  return rows.length > 0 ? rows[0] : null;
+}
+
+// Get all log dates for a user (as YYYY-MM-DD strings, no conversion)
+async function getAllLogDates(userId) {
+  try {
+    const [dailyLogDates] = await pool.query(
+      'SELECT DISTINCT date FROM daily_logs WHERE user_id = ? ORDER BY date ASC',
+      [userId]
+    );
+    const [lifestyleLogDates] = await pool.query(
+      'SELECT DISTINCT date FROM lifestyle_logs WHERE user_id = ? ORDER BY date ASC',
+      [userId]
+    );
+    // Always return only YYYY-MM-DD strings
+    const toYMD = (d) => (typeof d === 'string' ? d.slice(0, 10) : d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
+    const allDates = new Set([
+      ...dailyLogDates.map(log => toYMD(log.date)),
+      ...lifestyleLogDates.map(log => toYMD(log.date))
+    ]);
+    console.log('[getAllLogDates][finalDates]', Array.from(allDates));
+    return Array.from(allDates).sort();
+  } catch (error) {
+    console.error('Error getting log dates:', error);
+    return [];
+  }
+}
+
+// Utility: Filter and clean AI output for actionable insights (stricter)
+function extractActionableInsight(aiAnalysis) {
+  if (!aiAnalysis) return null;
+  const lines = aiAnalysis.split('\n')
+    .map(line => line.trim())
+    .filter(line =>
+      line &&
+      !/GMT|IST|Standard Time|\d{2}:\d{2}/i.test(line) &&
+      !/here are \d+-?\d* concrete, actionable, context-aware insights/i.test(line) &&
+      !/for the 7-day window ending/i.test(line) &&
+      !/AI Health Insight/i.test(line) &&
+      !/as a professional healthcare insights/i.test(line) &&
+      !/^here (is|are) (the )?generated health insights:?$/i.test(line) &&
+      !/^insight:?$/i.test(line)
+    );
+  // Accept the first line with a colon and at least 10 chars after colon, and not generic
+  for (const line of lines) {
+    // Remove markdown bold/italics
+    const cleanLine = line.replace(/^\*+|\*+$/g, '').replace(/^_+|_+$/g, '');
+    const [title, ...contentParts] = cleanLine.split(':');
+    const content = contentParts.join(':').trim();
+    if (
+      title && content && content.length > 10 &&
+      !/^here is the insight$/i.test(content) &&
+      !/^insight$/i.test(title) &&
+      !/^here is the insight$/i.test(title)
+    ) {
+      return { title: title.trim().slice(0, 255), content: content.slice(0, 10000) };
+    }
+  }
+  // If no 'Title: Content' found, but there is a non-empty, non-generic line, use it as content
+  for (const line of lines) {
+    const cleanLine = line.replace(/^\*+|\*+$/g, '').replace(/^_+|_+$/g, '');
+    if (
+      cleanLine.length > 20 &&
+      !/no actionable health insight|no health or lifestyle data|not enough data|insufficient data|no data|here is the insight/i.test(cleanLine)
+    ) {
+      return { title: 'Health Insight', content: cleanLine.slice(0, 10000) };
+    }
+  }
+  // If nothing found, return null
+  return null;
+}
+
+// PATCH: /api/insights/history - always use date string, never JS Date
+app.get('/api/insights/history', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const days = parseInt(req.query.days) || 7;
+    const allDates = await getAllLogDates(userId);
+    if (allDates.length === 0) {
+      console.log('[INSIGHTS] No log dates found for user', userId);
+      return res.json([]);
+    }
+    let dates = allDates.slice(-days);
+    const latestDate = allDates[allDates.length - 1];
+    if (!dates.includes(latestDate)) {
+      dates.push(latestDate);
+    }
+    dates = Array.from(new Set(dates)).sort();
+    console.log('[INSIGHTS][DATES]', dates);
+    const results = [];
+    for (const date of dates) {
+      console.log('[INSIGHTS][LOOP][TYPE]', typeof date, date);
+      try {
+        // Always check for existing insight for this exact date
+        const existing = await getExistingInsight(userId, date);
+        if (existing) {
+          results.push(existing);
+          continue;
+        }
+        // Use the current log date as the window end
+        const windowEndStr = date;
+        // Calculate window start (6 days before the current log date)
+        // Use string math, not JS Date
+        const windowStartStr = (() => {
+          const d = new Date(date + 'T00:00:00');
+          d.setDate(d.getDate() - 6);
+          return d.toISOString().slice(0, 10);
+        })();
+        // Fetch daily logs in window
+        const [dailyLogs] = await pool.query(
+          'SELECT * FROM daily_logs WHERE user_id = ? AND date BETWEEN ? AND ? ORDER BY date ASC',
+          [userId, windowStartStr, windowEndStr]
+        );
+        // Fetch lifestyle logs in window
+        const [lifestyleLogs] = await pool.query(
+          'SELECT * FROM lifestyle_logs WHERE user_id = ? AND date BETWEEN ? AND ? ORDER BY date ASC',
+          [userId, windowStartStr, windowEndStr]
+        );
+        console.log(`[INSIGHTS][${date}] Context:`, JSON.stringify({ dailyLogs, lifestyleLogs }));
+        if (dailyLogs.length === 0 && lifestyleLogs.length === 0) {
+          const noDataInsight = {
+            user_id: userId,
+            title: 'No Health Data',
+            content: 'No health or lifestyle data was logged for this day.',
+            category: 'General',
+            generated_date: date + ' 00:00:00'
+          };
+          await pool.query(
+            'INSERT INTO health_insights (user_id, title, content, category, generated_date) VALUES (?, ?, ?, ?, ?)',
+            [userId, noDataInsight.title, noDataInsight.content, noDataInsight.category, noDataInsight.generated_date]
+          );
+          results.push(noDataInsight);
+          continue;
+        }
+        const context = { dailyLogs, lifestyleLogs };
+        const response = await fetch(GROQ_API_URL, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${GROQ_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: 'llama3-70b-8192',
+            messages: [
+              {
+                role: 'system',
+                content: `You are a data-driven health coach analyzing the user's health logs. Your insights MUST follow this EXACT format:
+
+Title: [Specific Pattern or Issue]: [Data-driven observation with specific numbers and timeframes]
+
+Content: [Reference exact data points] Try these specific steps: 1) [Concrete action with specific numbers], 2) [Concrete action with specific numbers], 3) [Concrete action with specific numbers].
+
+Examples of good insights:
+
+"Mood and Sleep Pattern: Your mood has been consistently low (2-3/10) for the past 3 days, coinciding with reduced sleep (5-6 hours). Try these specific steps: 1) Set a consistent bedtime of 10 PM, 2) Take a 15-minute walk in the morning sunlight, 3) Track if this improves your mood ratings."
+
+"Headache Management: You've logged headaches with severity 4-5 for the past 4 days, often after long screen sessions. Consider: 1) Taking regular 20-minute screen breaks, 2) Staying hydrated (aim for 8 glasses of water), 3) Using the blue light filter on your devices."
+
+REQUIREMENTS:
+1. ALWAYS include specific numbers (e.g., "2-3/10", "5-6 hours", "4-5 days")
+2. ALWAYS provide exactly 3 numbered steps
+3. Each step MUST include specific numbers or timeframes
+4. NEVER use vague phrases like "try to", "consider", or "might be helpful"
+5. NEVER ask rhetorical questions
+6. NEVER use phrases like "I noticed" or "I see"
+7. ALWAYS reference the exact data from the user's logs
+8. If no clear pattern exists in the data, return "No actionable health insight could be generated for this day."
+9. Do NOT include any introductory or generic lines (such as "Here are the generated health insights:" or "Insight:"). Only output the actionable insight(s) in the required format.
+
+BAD examples (DO NOT USE):
+- "I noticed your mood has been improving..."
+- "Try to identify what worked for you..."
+- "Consider taking breaks..."
+- "It might be helpful to reflect..."`
+              },
+              {
+                role: 'user',
+                content: `Analyze this health data and generate insights following the exact format shown. Here is the complete context of the user's logs: ${JSON.stringify(context)}`
+              }
+            ],
+            temperature: 0.7, // Reduced temperature for more consistent formatting
+            max_tokens: 500
+          })
+        });
+        const groqResult = await response.json();
+        let aiAnalysis = groqResult.choices?.[0]?.message?.content?.trim() || '';
+        console.log(`[INSIGHTS][${date}] AI raw:`, aiAnalysis);
+        const actionable = extractActionableInsight(aiAnalysis);
+        if (!actionable) {
+          const noActionable = {
+            user_id: userId,
+            title: 'No Actionable Insight',
+            content: 'No actionable health insight could be generated for this day.',
+            category: 'General',
+            generated_date: date + ' 00:00:00'
+          };
+          await pool.query(
+            'INSERT INTO health_insights (user_id, title, content, category, generated_date) VALUES (?, ?, ?, ?, ?)',
+            [userId, noActionable.title, noActionable.content, noActionable.category, noActionable.generated_date]
+          );
+          results.push(noActionable);
+          continue;
+        }
+        const category = determineCategory(actionable.title + ': ' + actionable.content);
+        const insight = {
+          user_id: userId,
+          title: actionable.title,
+          content: actionable.content,
+          category,
+          generated_date: date + ' 00:00:00'
+        };
+        await pool.query(
+          'INSERT INTO health_insights (user_id, title, content, category, generated_date) VALUES (?, ?, ?, ?, ?)',
+          [userId, insight.title, insight.content, insight.category, insight.generated_date]
+        );
+        results.push(insight);
+      } catch (error) {
+        console.error(`Error processing insights for date ${date}:`, error);
+        continue;
+      }
+    }
+    res.json(results);
+  } catch (error) {
+    console.error('Error fetching insights history:', error);
+    res.status(500).json({ message: 'Server error while fetching insights history' });
+  }
+});
+
+// PATCH: /api/insights/generate - add debug logs, loosen filter, always try AI if context exists
+app.post('/api/insights/generate', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { date } = req.body;
+    if (!date) {
+      return res.status(400).json({ message: 'Date is required' });
+    }
+    // Check if insight already exists for this date
+    const existing = await getExistingInsight(userId, date);
+    if (existing) {
+      return res.json(existing);
+    }
+    // Generate context for this date (past 7 days ending on this date)
+    const windowStart = new Date(date);
+    windowStart.setDate(windowStart.getDate() - 6);
+    const windowStartStr = windowStart.toISOString().slice(0, 10);
+    const windowEndStr = date;
+    // Fetch daily logs in window
+    const [dailyLogs] = await pool.query(
+      'SELECT * FROM daily_logs WHERE user_id = ? AND date BETWEEN ? AND ? ORDER BY date ASC',
+      [userId, windowStartStr, windowEndStr]
+    );
+    // Fetch lifestyle logs in window
+    const [lifestyleLogs] = await pool.query(
+      'SELECT * FROM lifestyle_logs WHERE user_id = ? AND date BETWEEN ? AND ? ORDER BY date ASC',
+      [userId, windowStartStr, windowEndStr]
+    );
+    // Debug: Log context
+    console.log(`[INSIGHTS][${date}] Context:`, JSON.stringify({ dailyLogs, lifestyleLogs }));
+    // If no logs, return no data insight
+    if (dailyLogs.length === 0 && lifestyleLogs.length === 0) {
+      const noDataInsight = {
+        user_id: userId,
+        title: 'No Health Data',
+        content: 'No health or lifestyle data was logged for this day.',
+        category: 'General',
+        generated_date: date + ' 00:00:00'
+      };
+      await pool.query(
+        'INSERT INTO health_insights (user_id, title, content, category, generated_date) VALUES (?, ?, ?, ?, ?)',
+        [userId, noDataInsight.title, noDataInsight.content, noDataInsight.category, noDataInsight.generated_date]
+      );
+      return res.json(noDataInsight);
+    }
+    // Build context for AI
+    const context = { dailyLogs, lifestyleLogs };
+    // Call Groq API
+    const response = await fetch(GROQ_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${GROQ_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a data-driven health coach analyzing the user's health logs. Your insights MUST follow this EXACT format:
+
+Title: [Specific Pattern or Issue]: [Data-driven observation with specific numbers and timeframes]
+
+Content: [Reference exact data points] Try these specific steps: 1) [Concrete action with specific numbers], 2) [Concrete action with specific numbers], 3) [Concrete action with specific numbers].
+
+Examples of good insights:
+
+"Mood and Sleep Pattern: Your mood has been consistently low (2-3/5) for the past 3 days, coinciding with reduced sleep (5-6 hours). Try these specific steps: 1) Set a consistent bedtime of 10 PM, 2) Take a 15-minute walk in the morning sunlight, 3) Track if this improves your mood ratings."
+
+"Headache Management: You've logged headaches with severity 4-5 for the past 4 days, often after long screen sessions. Consider: 1) Taking regular 20-minute screen breaks, 2) Staying hydrated (aim for 8 glasses of water), 3) Using the blue light filter on your devices."
+
+REQUIREMENTS:
+1. ALWAYS include specific numbers (e.g., "2-3/10", "5-6 hours", "4-5 days")
+2. ALWAYS provide exactly 3 numbered steps
+3. Each step MUST include specific numbers or timeframes
+4. NEVER use vague phrases like "try to", "consider", or "might be helpful"
+5. NEVER ask rhetorical questions
+6. NEVER use phrases like "I noticed" or "I see"
+7. ALWAYS reference the exact data from the user's logs
+8. If no clear pattern exists in the data, return "No actionable health insight could be generated for this day."
+9. Do NOT include any introductory or generic lines (such as "Here are the generated health insights:" or "Insight:"). Only output the actionable insight(s) in the required format.
+
+BAD examples (DO NOT USE):
+- "I noticed your mood has been improving..."
+- "Try to identify what worked for you..."
+- "Consider taking breaks..."
+- "It might be helpful to reflect..."`
+          },
+          {
+            role: 'user',
+            content: `Analyze this health data and generate insights following the exact format shown. Here is the complete context of the user's logs: ${JSON.stringify(context)}`
+          }
+        ],
+        temperature: 0.7, // Reduced temperature for more consistent formatting
+        max_tokens: 500
+      })
+    });
+    const groqResult = await response.json();
+    let aiAnalysis = groqResult.choices?.[0]?.message?.content?.trim() || '';
+    // Debug: Log AI response
+    console.log(`[INSIGHTS][${date}] AI raw:`, aiAnalysis);
+    const actionable = extractActionableInsight(aiAnalysis);
+    if (!actionable) {
+      const noActionable = {
+        user_id: userId,
+        title: 'No Actionable Insight',
+        content: 'No actionable health insight could be generated for this day.',
+        category: 'General',
+        generated_date: date + ' 00:00:00'
+      };
+      await pool.query(
+        'INSERT INTO health_insights (user_id, title, content, category, generated_date) VALUES (?, ?, ?, ?, ?)',
+        [userId, noActionable.title, noActionable.content, noActionable.category, noActionable.generated_date]
+      );
+      return res.json(noActionable);
+    }
+    const category = determineCategory(actionable.title + ': ' + actionable.content);
+    const insight = {
+      user_id: userId,
+      title: actionable.title,
+      content: actionable.content,
+      category,
+      generated_date: date + ' 00:00:00'
+    };
+    await pool.query(
+      'INSERT INTO health_insights (user_id, title, content, category, generated_date) VALUES (?, ?, ?, ?, ?)',
+      [userId, insight.title, insight.content, insight.category, insight.generated_date]
+    );
+    res.json(insight);
+  } catch (error) {
+    console.error('Error generating insight:', error);
+    res.status(500).json({ message: 'Server error while generating insight' });
   }
 });
 

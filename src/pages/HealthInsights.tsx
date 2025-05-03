@@ -32,11 +32,12 @@ import {
 import { Link } from 'react-router-dom';
 
 interface Insight {
-  id: number;
+  id: number | string;
   title: string;
   content: string;
   category: string;
   generated_date: string;
+  date?: string;
 }
 
 interface MoodData {
@@ -50,7 +51,7 @@ interface SymptomData {
 }
 
 export default function HealthInsights() {
-  const [insights, setInsights] = useState<Insight[]>([]);
+  const [insights, setInsights] = useState<any[]>([]);
   const [moodData, setMoodData] = useState<MoodData[]>([]);
   const [symptomsData, setSymptomsData] = useState<SymptomData[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -60,6 +61,9 @@ export default function HealthInsights() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastFetchTime, setLastFetchTime] = useState<number>(0);
   const [hasNewData, setHasNewData] = useState(false);
+  const [lastInsightTime, setLastInsightTime] = useState<number>(0);
+  const [error, setError] = useState<string | null>(null);
+  const [days, setDays] = useState(7);
   
   const categories = [
     { name: 'Sleep', icon: BedDouble, color: 'bg-indigo-100 text-indigo-600' },
@@ -81,25 +85,74 @@ export default function HealthInsights() {
     }
   };
 
-  const fetchData = async () => {
+  const fetchLatestInsight = async () => {
     try {
       setIsRefreshing(true);
-      
-      // Fetch insights based on selected category
-      const params = selectedCategory ? { category: selectedCategory, timeRange } : { timeRange };
-      const insightsResponse = await insightsAPI.getInsights(params);
-      
-      if (Array.isArray(insightsResponse.data)) {
-        setInsights(insightsResponse.data);
+      const response = await insightsAPI.getLatestInsight();
+      if (response.data) {
+        setInsights([response.data]);
+        setLastInsightTime(new Date(response.data.generated_date).getTime());
       } else {
         setInsights([]);
       }
+    } catch (error) {
+      console.error('Error fetching latest AI insight:', error);
+    } finally {
+      setIsRefreshing(false);
+      setIsLoading(false);
+    }
+  };
+
+  const fetchData = async () => {
+    try {
+      setIsRefreshing(true);
+      setError(null);
       
-      // Fetch mood data
+      // Check if there is new data since the last insight
+      const latestLogResponse = await logsAPI.getLatestLogTimestamp();
+      const latestLogTime = new Date(latestLogResponse.data.timestamp).getTime();
+      
+      if (latestLogTime > lastInsightTime) {
+        // There is new data, generate a new insight
+        try {
+          const generateResponse = await insightsAPI.generateInsight();
+          if (generateResponse.data) {
+            // Fetch the updated insights history after generating new insight
+            const historyResponse = await insightsAPI.getInsightsHistory(days);
+            // Sort insights by date in descending order
+            const sortedInsights = (historyResponse.data || []).sort((a: Insight, b: Insight) => {
+              const dateA = new Date(a.date || a.generated_date).getTime();
+              const dateB = new Date(b.date || b.generated_date).getTime();
+              return dateB - dateA;
+            });
+            setInsights(sortedInsights);
+            setLastInsightTime(new Date(generateResponse.data.generated_date).getTime());
+          }
+        } catch (error) {
+          console.error('Error generating new insight:', error);
+          // If generation fails, still try to fetch existing insights
+          const historyResponse = await insightsAPI.getInsightsHistory(days);
+          const sortedInsights = (historyResponse.data || []).sort((a: Insight, b: Insight) => {
+            const dateA = new Date(a.date || a.generated_date).getTime();
+            const dateB = new Date(b.date || b.generated_date).getTime();
+            return dateB - dateA;
+          });
+          setInsights(sortedInsights);
+        }
+      } else {
+        // No new data, fetch the latest insights
+        const historyResponse = await insightsAPI.getInsightsHistory(days);
+        const sortedInsights = (historyResponse.data || []).sort((a: Insight, b: Insight) => {
+          const dateA = new Date(a.date || a.generated_date).getTime();
+          const dateB = new Date(b.date || b.generated_date).getTime();
+          return dateB - dateA;
+        });
+        setInsights(sortedInsights);
+      }
+      
+      // Fetch mood and symptoms data
       const moodResponse = await dashboardAPI.getMoodChart({ days: parseInt(timeRange) });
       setMoodData(moodResponse.data);
-      
-      // Fetch symptoms data
       const symptomsResponse = await dashboardAPI.getTopSymptoms();
       setSymptomsData(symptomsResponse.data);
       
@@ -107,6 +160,7 @@ export default function HealthInsights() {
       setHasNewData(false);
     } catch (error) {
       console.error('Error fetching health insights data:', error);
+      setError('Failed to load insights. Please try again.');
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -122,6 +176,29 @@ export default function HealthInsights() {
   useEffect(() => {
     fetchData();
   }, [selectedCategory, timeRange]);
+  
+  useEffect(() => {
+    const fetchInsightsHistory = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const response = await insightsAPI.getInsightsHistory(days);
+        // Sort insights by date in descending order
+        const sortedInsights = (response.data || []).sort((a: Insight, b: Insight) => {
+          const dateA = new Date(a.date || a.generated_date).getTime();
+          const dateB = new Date(b.date || b.generated_date).getTime();
+          return dateB - dateA;
+        });
+        setInsights(sortedInsights);
+      } catch (err) {
+        setError('Failed to load AI insights. Please try again later.');
+        setInsights([]);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchInsightsHistory();
+  }, [days]);
   
   // Filter insights based on search query
   const filteredInsights = insights.filter(insight => 
@@ -335,55 +412,30 @@ export default function HealthInsights() {
             </div>
           ))}
         </div>
-      ) : filteredInsights.length > 0 ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredInsights.map((insight) => {
-            const CategoryIcon = getCategoryIcon(insight.category);
-            const categoryColorClass = getCategoryColor(insight.category);
-            
-            return (
-              <motion.div
-                key={insight.id}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3 }}
-                className="card hover:shadow-card-hover"
-              >
-                <div className="flex items-start mb-4">
-                  <div className={`w-10 h-10 ${categoryColorClass} rounded-full flex items-center justify-center`}>
-                    <CategoryIcon size={18} />
-                  </div>
-                  <div className="ml-3">
-                    <h3 className="font-medium">{insight.title}</h3>
-                    <p className="text-xs text-neutral-500">
-                      <span className="inline-block bg-neutral-100 px-2 py-0.5 rounded-full">
-                        {insight.category}
-                      </span>
-                      <span className="ml-2">
-                        {new Date(insight.generated_date).toLocaleDateString()}
-                      </span>
-                    </p>
-                  </div>
-                </div>
-                
-                <p className="text-sm text-neutral-700 whitespace-pre-line">{insight.content}</p>
-              </motion.div>
-            );
-          })}
-        </div>
+      ) : error ? (
+        <div className="text-error-600">{error}</div>
       ) : (
-        <div className="card text-center py-10">
-          <Brain size={48} className="mx-auto mb-4 text-neutral-300" />
-          <h3 className="text-lg font-medium mb-2">No insights available</h3>
-          <p className="text-neutral-500 mb-6 max-w-md mx-auto">
-            {searchQuery 
-              ? "No insights match your search criteria. Try adjusting your filters."
-              : "Keep logging your daily health data to receive personalized insights based on your patterns."}
-          </p>
-          <Link to="/daily-log" className="btn btn-primary inline-flex items-center">
-            <Calendar size={18} className="mr-2" />
-            Add a daily log
-          </Link>
+        <div className="space-y-6">
+          {insights.length === 0 ? (
+            <div className="text-neutral-500">No insights available.</div>
+          ) : (
+            insights.map((insight, idx) => (
+              <div key={insight.id || idx} className="card p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="font-semibold text-primary-700">
+                    {(insight.date || insight.generated_date).slice(0, 10)}
+                  </span>
+                  <span className="text-xs text-neutral-400">{insight.title}</span>
+                </div>
+                <div className="text-neutral-800 whitespace-pre-line">
+                  {insight.content && insight.content.trim().length > 10 && !/here is the insight/i.test(insight.content)
+                    ? insight.content
+                    : <span className="text-neutral-500 italic">No actionable health insight could be generated for this day.</span>
+                  }
+                </div>
+              </div>
+            ))
+          )}
         </div>
       )}
     </motion.div>
