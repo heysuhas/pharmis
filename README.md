@@ -1,12 +1,12 @@
 # PHARMIS
 
-> A personal health monitoring system where users can securely track their health details, view insightful charts, and get AI-driven insights — **without any doctors or admin interaction**.
+> a personal health monitoring system where users can securely track their health details, view insightful charts, and get ai driven insights — **without any doctors or admin interaction**.
 
 ---
 
 ## Getting Started
 
-Follow these steps to set up and run the project locally:
+you can follow the steps below to run the code locally:
 
 ### 1. install dependencies
 ```bash
